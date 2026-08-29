@@ -1,0 +1,19 @@
+node_modules/
+.env
+.wwebjs_auth/
+.wwebjs_auth*/
+.wwebjs_cache/
+.claude/settings.local.json
+scripts/teams-snapshot-gcp.json
+data/
+!knowledge-base/
+!knowledge-base/*.pdf
+!knowledge-base/*.txt
+logs/
+*.db
+*.log
+.DS_Store
+secrets/
+whatsapp-bot-big query.json
+*-bq.json
+**/gcp-*-key.json

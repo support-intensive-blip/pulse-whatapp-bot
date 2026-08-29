@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-ai-assistant
+    restart: unless-stopped
+    stop_grace_period: 30s
+    shm_size: "2gb"
+    mem_limit: 3g
+    memswap_limit: 3g
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./knowledge-base:/app/knowledge-base
+      - ./secrets:/app/secrets:ro
+      - wwebjs_auth:/app/.wwebjs_auth
+      - wwebjs_cache:/app/.wwebjs_cache
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=1536
+      - PUPPETEER_PROTOCOL_TIMEOUT=600000
+      - PUPPETEER_LAUNCH_TIMEOUT=300000
+      - WHATSAPP_AUTH_TIMEOUT_MS=300000
+      - WHATSAPP_WWEBJS_READY_MS=60000
+      - CHAT_SYNC_ON_READY=true
+      - MAX_SYNC_CHATS=50
+      - WHATSAPP_TAKEOVER_ON_CONFLICT=true
+      # Local pinned WA HTML keeps session stable; messageHandler falls back if getChat fails.
+      - WHATSAPP_WEB_VERSION_LOCAL=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+volumes:
+  wwebjs_auth:
+  wwebjs_cache:

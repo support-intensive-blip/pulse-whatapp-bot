@@ -1,0 +1,15 @@
+node_modules
+dashboard/node_modules
+.wwebjs_auth
+.wwebjs_cache
+data
+logs
+uploads
+tmp
+knowledge-base
+secrets
+.env
+.git
+.gitignore
+*.md
+deploy/gcp/whatsapp-bot-deploy.tar.gz
