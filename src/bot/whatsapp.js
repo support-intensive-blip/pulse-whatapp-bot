@@ -45,7 +45,7 @@ function resolveWebVersionCache() {
     type: 'remote',
     remotePath:
       process.env.WHATSAPP_WEB_VERSION_URL ||
-      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041540217-alpha.html',
+      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1046332251-alpha.html',
   };
 }
 

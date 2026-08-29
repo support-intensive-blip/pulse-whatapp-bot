@@ -1,0 +1,57 @@
+# Render Blueprint — deploy the WhatsApp AI Assistant as a Docker web service.
+#
+# whatsapp-web.js drives a headless Chromium, so this MUST run on the Docker
+# runtime (the Dockerfile installs Chromium) — NOT Render's native Node/Go env.
+#
+# Apply: push this file, then in Render → "New +" → "Blueprint" → pick this repo.
+# After the first deploy, open https://<service>.onrender.com and scan the QR
+# (or use the pairing-code flow) from the dashboard's Connect page.
+services:
+  - type: web
+    name: pulse-whatapp-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    # Chromium + Node + SQLite need real memory. Starter (512MB) will OOM once
+    # WhatsApp Web loads — use Standard (2GB) or larger.
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    # Render allows exactly one disk. The WhatsApp session is the thing that is
+    # painful to recreate (needs the phone), so it gets the disk. SQLite data/
+    # stays on ephemeral container storage and rebuilds on redeploy.
+    disk:
+      name: wwebjs-session
+      mountPath: /app/.wwebjs_auth
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/chromium
+      # Keep Chromium's heap modest so the container stays under the plan limit.
+      - key: CHROMIUM_JS_HEAP_MB
+        value: "512"
+      # Pin the WhatsApp Web build. Bump this when links start failing — get the
+      # newest filename from github.com/wppconnect-team/wa-version/tree/main/html
+      - key: WHATSAPP_WEB_VERSION_URL
+        value: https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1046332251-alpha.html
+      - key: VECTOR_BACKEND
+        value: local
+      - key: OPENAI_MODEL_SMART
+        value: gpt-4o
+      - key: OPENAI_MODEL_FAST
+        value: gpt-4o-mini
+      # --- secrets: set these in the Render dashboard, they are not synced ---
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DASHBOARD_ADMIN_EMAIL
+        sync: false
+      - key: DASHBOARD_ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
