@@ -235,6 +235,13 @@ class VectorStoreService {
     return this.getLocalStore(teamId).isIndexed(sourceHash);
   }
 
+  /** Source hash already held in memory for this team, with no disk read — lets
+   *  callers skip a full reload when nothing has changed. Local backend only. */
+  getLoadedSourceHash(teamId = null) {
+    if (this.activeBackend() !== 'local') return null;
+    return this.getLocalStore(teamId).sourceHash;
+  }
+
   async indexDocument(teamId, fullText, sourceHash, options = {}) {
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     onProgress?.({

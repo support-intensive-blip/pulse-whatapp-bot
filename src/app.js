@@ -27,10 +27,15 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 let reminderCronJob = null;
 let kbRefreshTimer = null;
 
+// Default 30 min: the KB source file only changes when someone edits/re-uploads
+// it via the dashboard, so there's no reason to poll every few seconds. The
+// refresh itself now short-circuits on an unchanged hash (see
+// knowledgeBaseService._refresh), but a short interval still means a disk read
+// + hash of the source file every tick for no benefit.
 const KB_REINGEST_INTERVAL_MS = (() => {
   const raw = Number(process.env.KB_REINGEST_INTERVAL_MS);
   if (Number.isFinite(raw) && raw >= 5000) return raw;
-  return 10000;
+  return 30 * 60 * 1000;
 })();
 
 function validateEnvironment() {

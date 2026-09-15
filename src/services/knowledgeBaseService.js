@@ -842,6 +842,16 @@ class KnowledgeBaseService {
       }
 
       const sourceHash = vectorStoreService.hashSource(pdfPath);
+
+      // Cheap short-circuit: this scheduler ticks every few seconds, and the
+      // full reload below re-parses the whole vector store JSON and rebuilds
+      // the TF-IDF vocabulary from scratch — a synchronous, event-loop-blocking
+      // cost that has nothing to do with whether the KB actually changed.
+      // Skip it entirely when the already-loaded index matches the source file.
+      if (state.loaded && vectorStoreService.getLoadedSourceHash(teamId) === sourceHash) {
+        return true;
+      }
+
       await vectorStoreService.loadFromDisk(teamId);
 
       if (await vectorStoreService.isIndexed(teamId, sourceHash)) {
