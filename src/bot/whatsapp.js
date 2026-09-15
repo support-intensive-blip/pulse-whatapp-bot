@@ -1155,6 +1155,20 @@ class WhatsAppBot {
 
     this.client.on('loading_screen', (percent, message) => {
       logger.info(`WhatsApp loading ${percent}% (bot ${this.botAccountId}): ${message || ''}`);
+
+      // loading_screen only fires post-authentication, but the 'authenticated'
+      // event has been observed not to fire on the Node side even though the
+      // page itself is already past QR/pairing. Without this, prepareAuthMode()
+      // thinks it's safe to call cancelPairingCode() on an already-linked
+      // session (auth-mode toggles from the Connect page), which logs it out.
+      if (!this._authenticatedAt) {
+        logger.warn(
+          `loading_screen fired without an 'authenticated' event (bot ${this.botAccountId}) — backfilling auth state`
+        );
+        this._authenticatedAt = Date.now();
+        this.startReadyWatchdog();
+      }
+
       // After load completes, WhatsApp often remounts collections — re-hook inbound.
       if (percent >= 99) {
         this._waListenersAttached = false;
