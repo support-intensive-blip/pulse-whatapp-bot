@@ -1663,8 +1663,14 @@ class ChatProfileService {
       return 0;
     }
 
-    // Prefer Store Contact models (fast). client.getContacts() often hangs / fails
-    // with cryptic WA errors and blocks the whole sync timeout.
+    // Store Contact models are fast but only cover what WhatsApp Web has
+    // lazily loaded into the page so far — right after a fresh login (or for
+    // any contact you haven't recently chatted with) that's a small fraction
+    // of the real contact list, even though it's non-empty. Use it as a fast
+    // first pass, but always also pull the full client.getContacts() list
+    // and merge it in — don't skip the authoritative source just because the
+    // fast path returned *something*, or most contacts never get names/
+    // profiles and silently never get replies.
     try {
       const storeContacts = await withTimeout(
         this.fetchContactsFromStoreFallback(client),
@@ -1673,27 +1679,34 @@ class ChatProfileService {
       );
       nameIndex = this.buildContactNameIndex(storeContacts);
       phoneByChatId = this.buildContactPhoneByChatId(storeContacts);
+      if (nameIndex.size) {
+        logger.info(`Contact name index (store pass): ${nameIndex.size} key(s)`);
+      }
     } catch (error) {
       logger.warn(`Store contact index failed: ${error.message}`);
     }
 
-    if (!nameIndex.size) {
-      try {
-        const allContacts = await awaitWithAbort(
-          withTimeout(client.getContacts(), lightweight ? 12000 : 30000, 'getContacts'),
-          shouldAbort
-        );
-        nameIndex = this.buildContactNameIndex(allContacts);
-        phoneByChatId = this.buildContactPhoneByChatId(allContacts);
-      } catch (error) {
-        if (isRecoverableBrowserError(error)) {
-          logger.warn(`Aborted chat sync — browser unavailable: ${error.message}`);
-          throw error;
-        }
-        logger.warn(`Could not load WhatsApp contacts for names: ${error.message}`);
+    try {
+      const allContacts = await awaitWithAbort(
+        withTimeout(client.getContacts(), lightweight ? 12000 : 30000, 'getContacts'),
+        shouldAbort
+      );
+      const fullNameIndex = this.buildContactNameIndex(allContacts);
+      const fullPhoneByChatId = this.buildContactPhoneByChatId(allContacts);
+      for (const [key, value] of fullNameIndex) nameIndex.set(key, value);
+      for (const [key, value] of fullPhoneByChatId) phoneByChatId.set(key, value);
+      logger.info(
+        `Contact name index ready: ${nameIndex.size} key(s) (full fetch added ${fullNameIndex.size})`
+      );
+    } catch (error) {
+      if (isRecoverableBrowserError(error)) {
+        logger.warn(`Aborted chat sync — browser unavailable: ${error.message}`);
+        throw error;
       }
-    } else {
-      logger.info(`Contact name index ready: ${nameIndex.size} key(s)`);
+      logger.warn(`Could not load full WhatsApp contact list for names: ${error.message}`);
+      if (nameIndex.size) {
+        logger.info(`Contact name index ready: ${nameIndex.size} key(s) (store fallback only)`);
+      }
     }
 
     const privateChats = chats
