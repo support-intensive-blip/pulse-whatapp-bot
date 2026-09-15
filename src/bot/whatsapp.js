@@ -41,12 +41,19 @@ function resolveWebVersionCache() {
   if (preferLocal && fs.existsSync(localPath)) {
     return { type: 'local', path: localPath };
   }
-  return {
-    type: 'remote',
-    remotePath:
-      process.env.WHATSAPP_WEB_VERSION_URL ||
-      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1046332251-alpha.html',
-  };
+
+  if (process.env.WHATSAPP_WEB_VERSION_URL) {
+    return { type: 'remote', remotePath: process.env.WHATSAPP_WEB_VERSION_URL };
+  }
+
+  // No pin by default. whatsapp-web.js's injected page hooks (Store/module
+  // lookups) haven't shipped an update in months, while WhatsApp Web's live
+  // build changes almost daily — pinning to a manually-picked archived
+  // snapshot is a guess at compatibility, not an improvement over it. Loading
+  // whatever WhatsApp is actually serving live also can't expire. Set
+  // WHATSAPP_WEB_VERSION_URL only if login regresses after a WhatsApp Web
+  // release and an older pinned build is confirmed to work better.
+  return { type: 'none' };
 }
 
 

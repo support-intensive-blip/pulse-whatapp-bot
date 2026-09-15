@@ -38,10 +38,12 @@ services:
       # Keep Chromium's heap modest so the container stays under the plan limit.
       - key: CHROMIUM_JS_HEAP_MB
         value: "512"
-      # Pin the WhatsApp Web build. Bump this when links start failing — get the
-      # newest filename from github.com/wppconnect-team/wa-version/tree/main/html
-      - key: WHATSAPP_WEB_VERSION_URL
-        value: https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1047523314-alpha.html
+      # No WHATSAPP_WEB_VERSION_URL pin: the client now loads whatever WhatsApp
+      # Web is actually serving live (see resolveWebVersionCache in
+      # src/bot/whatsapp.js). Only add this var back — pointing at a snapshot
+      # from github.com/wppconnect-team/wa-version/tree/main/html — if login
+      # regresses after a WhatsApp Web release and an older pinned build is
+      # confirmed to fix it.
       - key: VECTOR_BACKEND
         value: local
       - key: OPENAI_MODEL_SMART
