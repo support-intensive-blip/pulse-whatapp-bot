@@ -988,6 +988,14 @@ class WhatsAppBot {
 
 
     this.client.on('authenticated', () => {
+      // Already ready — this event has been observed to arrive tens of seconds
+      // late (after loading_screen already backfilled auth state and promoted
+      // to ready). Don't push the dashboard back to CONNECTING or reset
+      // bookkeeping for a session that's already up.
+      if (this.isReady) {
+        return;
+      }
+
       if (this._authenticatedAt && this.getAuthSyncMs() < 3000) {
         return;
       }
