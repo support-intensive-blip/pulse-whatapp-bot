@@ -15,7 +15,9 @@ The system prompt and knowledge base are fixed in code:
 > This file is the top-level map. For the two most-changed subsystems there are dedicated docs:
 > **[docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md)** (KB chunking/retrieval/gating rules) and
 > **[docs/VERTEX-PIPELINE.md](docs/VERTEX-PIPELINE.md)** (the active vector-search backend,
-> step-by-step, with the full debug-logging reference).
+> step-by-step, with the full debug-logging reference). For runtime behavior — message
+> timing, conversation modes, when a chat is considered "ended," what every slash command
+> actually does — see **[docs/BOT-BEHAVIOR.md](docs/BOT-BEHAVIOR.md)**.
 
 ---
 
