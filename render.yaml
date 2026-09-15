@@ -17,12 +17,14 @@ services:
     plan: standard
     healthCheckPath: /health
     autoDeploy: true
-    # Render allows exactly one disk. The WhatsApp session is the thing that is
-    # painful to recreate (needs the phone), so it gets the disk. SQLite data/
-    # stays on ephemeral container storage and rebuilds on redeploy.
+    # Render allows exactly one disk. It's mounted at /app/persist and holds
+    # BOTH the WhatsApp session AND data/ (SQLite conversation memory + local
+    # KB index) as subfolders — docker-entrypoint.sh symlinks .wwebjs_auth and
+    # data into it. Previously only the WhatsApp session was on the disk, so
+    # conversation memory and the KB index were wiped on every redeploy/restart.
     disk:
       name: wwebjs-session
-      mountPath: /app/.wwebjs_auth
+      mountPath: /app/persist
       sizeGB: 1
     envVars:
       - key: NODE_ENV
@@ -39,7 +41,7 @@ services:
       # Pin the WhatsApp Web build. Bump this when links start failing — get the
       # newest filename from github.com/wppconnect-team/wa-version/tree/main/html
       - key: WHATSAPP_WEB_VERSION_URL
-        value: https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1046332251-alpha.html
+        value: https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1047523314-alpha.html
       - key: VECTOR_BACKEND
         value: local
       - key: OPENAI_MODEL_SMART
