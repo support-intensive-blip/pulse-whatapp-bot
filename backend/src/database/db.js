@@ -307,6 +307,19 @@ function runMigrations(database) {
     logger.info('Migration: added bot_accounts.context_window_minutes');
   }
 
+  // Testing mode: when on, the bot only replies to the numbers in test_numbers (JSON array).
+  if (!columnExists(database, 'bot_accounts', 'test_mode_enabled')) {
+    database.exec(
+      'ALTER TABLE bot_accounts ADD COLUMN test_mode_enabled INTEGER NOT NULL DEFAULT 0'
+    );
+    logger.info('Migration: added bot_accounts.test_mode_enabled');
+  }
+
+  if (!columnExists(database, 'bot_accounts', 'test_numbers')) {
+    database.exec("ALTER TABLE bot_accounts ADD COLUMN test_numbers TEXT NOT NULL DEFAULT '[]'");
+    logger.info('Migration: added bot_accounts.test_numbers');
+  }
+
   const actionItemColumns = [
     ['category', 'TEXT'],
     ['priority', 'TEXT'],

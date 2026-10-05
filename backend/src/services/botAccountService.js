@@ -1,6 +1,6 @@
 const { getDatabase } = require('../database/db');
 const logger = require('../utils/logger');
-const { normalizePhone } = require('../utils/helpers');
+const { normalizePhone, canonicalContactPhone } = require('../utils/helpers');
 const {
   MAX_REPLY_DELAY_SECONDS,
   MAX_BATCH_DELAY_SECONDS,
@@ -50,6 +50,40 @@ class BotAccountService {
     const bot = this.findById(botAccountId);
     if (!bot) return DEFAULT_CONTEXT_WINDOW_MINUTES;
     return this.clampContextWindowMinutes(bot.context_window_minutes);
+  }
+
+  /** Validates and canonicalizes a test-number list; throws on an invalid entry. */
+  normalizeTestNumbers(numbers) {
+    if (!Array.isArray(numbers)) throw new Error('testNumbers must be a list of phone numbers');
+    const result = [];
+    for (const raw of numbers) {
+      const phone = canonicalContactPhone(raw);
+      if (!phone || phone.length < 11 || phone.length > 13) {
+        throw new Error(`"${raw}" is not a valid phone number — use 10 digits or include the country code`);
+      }
+      if (!result.includes(phone)) result.push(phone);
+    }
+    return result;
+  }
+
+  parseTestNumbers(bot) {
+    try {
+      const list = JSON.parse(bot?.test_numbers || '[]');
+      return Array.isArray(list) ? list.map(String) : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  /**
+   * Testing mode gate: with testing mode on, only listed numbers get AI replies.
+   * Returns null when testing mode is off (normal per-chat rules apply).
+   */
+  resolveTestModeAccess(botAccountId, phone) {
+    const bot = this.findById(botAccountId);
+    if (!bot || !bot.test_mode_enabled) return null;
+    const canonical = canonicalContactPhone(phone);
+    return Boolean(canonical) && this.parseTestNumbers(bot).includes(canonical);
   }
 
   findById(id) {
@@ -172,6 +206,8 @@ class BotAccountService {
       replyDelaySeconds: 'reply_delay_seconds',
       batchDelaySeconds: 'batch_delay_seconds',
       contextWindowMinutes: 'context_window_minutes',
+      testModeEnabled: 'test_mode_enabled',
+      testNumbers: 'test_numbers',
     };
 
     for (const [key, column] of Object.entries(map)) {
@@ -184,6 +220,8 @@ class BotAccountService {
           val = this.clampBatchDelaySeconds(val);
         } else if (column === 'context_window_minutes') {
           val = this.clampContextWindowMinutes(val);
+        } else if (column === 'test_numbers') {
+          val = JSON.stringify(this.normalizeTestNumbers(val));
         } else if (column.includes('_enabled')) {
           val = val ? 1 : 0;
         }
@@ -271,6 +309,8 @@ class BotAccountService {
       assistantSelfEnabled: bot.assistant_self_enabled === 1,
       assistantContactsEnabled: bot.assistant_contacts_enabled === 1,
       lastError: bot.last_error,
+      testModeEnabled: bot.test_mode_enabled === 1,
+      testNumbers: this.parseTestNumbers(bot),
       updatedAt: bot.updated_at,
     };
   }

@@ -181,6 +181,11 @@ citing facts, more natural for small talk.
   off for that chat in the dashboard, or replies from Gallabox's inbox.
 - When assistant is disabled for a chat, inbound messages are still stored (so history
   isn't lost) but no AI reply is generated or sent.
+- **Testing mode** (dashboard → Settings → Testing mode; `bot_accounts.test_mode_enabled` +
+  `test_numbers`): while on, the bot replies **only** to the listed numbers and ignores the
+  per-chat / global AI switches. Everyone else's messages are stored with no reply (logged
+  as `Testing mode: <phone> is not a test number`). Turning it off restores the normal
+  switches. Numbers are saved with country code (a 10-digit entry gets `91` prepended).
 
 ## 9. Escalation ("Call to Action") queue and the scope firewall
 

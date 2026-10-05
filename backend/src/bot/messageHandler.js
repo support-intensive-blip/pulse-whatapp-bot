@@ -100,7 +100,11 @@ class MessageHandler {
     return true;
   }
 
-  isAssistantAllowed(context) {
+  isAssistantAllowed(context, phone) {
+    // Testing mode overrides the per-chat/global AI switches: only listed numbers get replies.
+    const testAccess = botAccountService.resolveTestModeAccess(this.getBotAccountId(), phone);
+    if (testAccess !== null) return testAccess;
+
     const freshOwner = userService.findById(context.owner.id) || context.owner;
     const freshProfile =
       chatProfileService.findById(context.chatProfile.id) || context.chatProfile;
@@ -184,7 +188,7 @@ class MessageHandler {
       }
 
       const botAccountId = this.getBotAccountId();
-      const assistantAllowed = this.isAssistantAllowed(context);
+      const assistantAllowed = this.isAssistantAllowed(context, inbound.phone);
 
       const escalationContent = context.lastInboundEscalationContent;
       const escalationResult = await escalationService.processInbound({
@@ -198,6 +202,10 @@ class MessageHandler {
       });
 
       if (!assistantAllowed && !escalationResult?.autoReply) {
+        if (botAccountService.resolveTestModeAccess(botAccountId, inbound.phone) === false) {
+          logger.info(`Testing mode: ${inbound.phone} is not a test number — message stored, no reply`);
+          return;
+        }
         logger.info(
           `Assistant disabled for chat profile ${context.chatProfile.id} (active=${context.chatProfile.assistant_active}, pinned=${context.chatProfile.assistant_pinned_on}, global=${userService.isAssistantContactsEnabled(context.owner)}) — message stored, no reply`
         );

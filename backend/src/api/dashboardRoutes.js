@@ -379,12 +379,19 @@ function createDashboardRouter() {
       return res.status(404).json({ error: 'No bot account' });
     }
 
-    const updated = botAccountService.updateSettings(bot.id, {
-      name: req.body?.name,
-      assistantName: req.body?.assistantName,
-      assistantSelfEnabled: req.body?.assistantSelfEnabled,
-      assistantContactsEnabled: req.body?.assistantContactsEnabled,
-    });
+    let updated;
+    try {
+      updated = botAccountService.updateSettings(bot.id, {
+        name: req.body?.name,
+        assistantName: req.body?.assistantName,
+        assistantSelfEnabled: req.body?.assistantSelfEnabled,
+        assistantContactsEnabled: req.body?.assistantContactsEnabled,
+        testModeEnabled: req.body?.testModeEnabled,
+        testNumbers: req.body?.testNumbers,
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
 
     res.json(botAccountService.toPublic(updated));
   });
