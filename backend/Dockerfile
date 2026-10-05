@@ -1,5 +1,7 @@
 # Backend only — the dashboard (../frontend) is built and hosted by Netlify.
-FROM node:20-bullseye-slim
+# Debian 12 (bookworm): bullseye reached end of life and its security repo now
+# 404s, which broke `apt-get install ffmpeg`.
+FROM node:20-bookworm-slim
 
 # ffmpeg: voice-note conversion for Whisper. No Chromium — WhatsApp goes through
 # the Gallabox API instead of a headless WhatsApp Web session.
