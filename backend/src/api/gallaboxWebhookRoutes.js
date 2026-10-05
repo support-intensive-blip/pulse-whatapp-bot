@@ -18,7 +18,10 @@ function createGallaboxWebhookRouter(botManager) {
 
     if (webhookSecret) {
       if (!gallaboxApi.verifySignature(req.rawBody, signature)) {
-        logger.warn('Rejected Gallabox webhook with missing/invalid signature');
+        // No secrets logged — just enough to tell "no header" from "wrong secret/format".
+        logger.warn(
+          `Rejected Gallabox webhook: ${signature ? `signature mismatch (header length ${String(signature).length})` : 'no x-gallabox-signature header'}, event=${req.get('x-event-name') || 'n/a'}, body=${req.rawBody?.length || 0} bytes — check the secret on the Gallabox webhook matches GALLABOX_WEBHOOK_SECRET`
+        );
         return res.status(401).json({ error: 'Invalid signature' });
       }
     } else if (process.env.NODE_ENV === 'production') {
@@ -28,6 +31,7 @@ function createGallaboxWebhookRouter(botManager) {
 
     const eventName = req.get('x-event-name') || req.body?.event || req.body?.eventName || 'Message.Received';
     const payload = req.body || {};
+    logger.info(`Gallabox webhook accepted: event=${eventName}, type=${payload?.whatsapp?.type || 'n/a'}`);
 
     // Acknowledge first: Gallabox only needs a 2xx, and the AI reply (batch window
     // + LLM call) takes far longer than a webhook should be held open.

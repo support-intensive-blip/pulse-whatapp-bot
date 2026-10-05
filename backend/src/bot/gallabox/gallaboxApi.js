@@ -117,22 +117,23 @@ async function downloadMedia(url, { mimeType = null, filename = null } = {}) {
 }
 
 /**
- * Gallabox signs webhooks with `x-gallabox-signature`: base64 HMAC-SHA256 of the
- * raw request body using the secret set on the webhook in Settings → Webhooks.
+ * Gallabox signs webhooks with `x-gallabox-signature`: HMAC-SHA256 of the raw
+ * request body using the secret set on the webhook in Settings → Webhooks.
+ * Docs say base64; hex (optionally "sha256="-prefixed) is accepted too.
  */
 function verifySignature(rawBody, signature) {
   const { webhookSecret } = getConfig();
   if (!webhookSecret || !rawBody || !signature) return false;
 
   const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest();
-  let provided;
-  try {
-    provided = Buffer.from(String(signature).trim(), 'base64');
-  } catch (_error) {
-    return false;
-  }
-  if (provided.length !== expected.length) return false;
-  return crypto.timingSafeEqual(provided, expected);
+  const value = String(signature).trim().replace(/^sha256=/i, '');
+  const candidates = [];
+  if (/^[0-9a-f]{64}$/i.test(value)) candidates.push(Buffer.from(value, 'hex'));
+  candidates.push(Buffer.from(value, 'base64'));
+
+  return candidates.some(
+    (provided) => provided.length === expected.length && crypto.timingSafeEqual(provided, expected)
+  );
 }
 
 function logConfigStatus() {

@@ -66,7 +66,10 @@ class GallaboxBot {
       return;
     }
 
-    if (eventName !== 'Message.Received') return;
+    if (eventName !== 'Message.Received') {
+      logger.info(`Gallabox event ${eventName} not handled (only Message.Received is)`);
+      return;
+    }
 
     const { channelId } = gallaboxApi.getConfig();
     if (channelId && payload?.channelId && payload.channelId !== channelId) {
@@ -76,7 +79,9 @@ class GallaboxBot {
 
     const inbound = fromGallaboxPayload(payload);
     if (!inbound) {
-      logger.info(`Ignored Gallabox message type=${payload?.whatsapp?.type || 'unknown'}`);
+      logger.warn(
+        `Ignored Gallabox message type=${payload?.whatsapp?.type || 'unknown'} — payload keys: ${Object.keys(payload || {}).join(',')}; whatsapp keys: ${Object.keys(payload?.whatsapp || {}).join(',')}`
+      );
       return;
     }
 
