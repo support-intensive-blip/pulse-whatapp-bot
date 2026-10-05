@@ -1,5 +1,7 @@
 # RAG Framework (Internal)
 
+> Paths below (`src/...`, `knowledge-base/...`) are relative to `backend/`.
+
 One-page reference for the WhatsApp bot knowledge-base pipeline. Production path (since
 2026-08-17): **Vertex AI Vector Search hybrid retrieval** + **QA-delimiter KB files**. Pinecone
 was the backend before that (2026-06 to 2026-07-21) and the code path still exists/works if

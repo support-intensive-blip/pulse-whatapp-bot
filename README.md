@@ -1,8 +1,18 @@
 # WhatsApp AI Assistant
 
-A production, single-tenant WhatsApp AI assistant built on **whatsapp-web.js** + **OpenAI**, with
+A production, single-tenant WhatsApp AI assistant built on the **WhatsApp Business API via
+Gallabox** + **OpenAI**, with
 a hybrid (dense + BM25) RAG knowledge base, a React operator dashboard, and BigQuery-backed
 durable storage. One dashboard login, one WhatsApp number, one hardcoded persona.
+
+The repo has two deployable halves:
+
+| Folder | What | Deployed to |
+|---|---|---|
+| [backend/](backend/) | Node/Express API, Gallabox webhook, AI + KB, SQLite | **Render** (Docker, persistent disk) — [render.yaml](render.yaml) |
+| [frontend/](frontend/) | React + Vite dashboard | **Netlify** — [frontend/netlify.toml](frontend/netlify.toml) |
+
+Code paths in this README (`src/...`, `knowledge-base/...`) are relative to `backend/`.
 
 The system prompt and knowledge base are fixed in code:
 - **System prompt:** `src/config/intensiveConfig.js` (loads `src/config/intensive-system-prompt.txt`)
@@ -25,14 +35,17 @@ The system prompt and knowledge base are fixed in code:
 
 ```
 src/
-├── app.js                     # Entry point: DB init, config load, Express + WhatsApp bots, cron
+├── app.js                     # Entry point: DB init, config load, Express + Gallabox bot, cron
 ├── api/
-│   ├── dashboardRoutes.js     # Main API — auth, conversations, bot lifecycle, action items
+│   ├── dashboardRoutes.js     # Main API — auth, conversations, bot status, action items
+│   ├── gallaboxWebhookRoutes.js  # POST /webhooks/gallabox — inbound WhatsApp messages
 │   ├── routes.js              # Legacy simple GETs (/health, /users, /stats, ...)
 │   └── testApiRoutes.js       # /api/test/chat — used by the Opik eval harness
 ├── bot/
-│   ├── whatsapp.js            # WhatsApp client lifecycle, QR/pairing, reconnection
-│   └── messageHandler.js      # Inbound routing: slash commands vs. free-text → chatService
+│   ├── gallabox/              # Gallabox REST client (send, media download, HMAC) + payload normalizer
+│   ├── gallaboxBot.js         # The connected WhatsApp Business number: webhook events in, replies out
+│   ├── botManager.js          # Picks which dashboard account owns the Gallabox number
+│   └── messageHandler.js      # Inbound pipeline: store → escalation/firewall → batch → chatService
 ├── ai/
 │   ├── systemPrompts.js       # Persona/system prompt assembly
 │   ├── replyRules.js          # Firewall / sanitization on outbound replies
@@ -45,9 +58,11 @@ src/
 ├── scripts/                   # One-off / setup scripts (KB ingest, Vertex/Pinecone provisioning)
 └── utils/                     # logger, networkInfo (public/private IP), helpers
 
-dashboard/                     # React + Vite operator UI, built into dashboard/dist and served by Express
-Opik/                          # Offline eval harness scoring bot replies against a golden dataset
-deploy/{gcp,aws,bigquery}/     # Deployment guides + scripts per target
+(repo root)
+├── backend/                   # everything above, plus Dockerfile, package.json, knowledge-base/, scripts/
+├── frontend/                  # React + Vite operator UI (Netlify), netlify.toml
+├── render.yaml                # Render Blueprint for backend/
+└── docs/
 ```
 
 ## Storage: SQLite + BigQuery
@@ -65,7 +80,7 @@ Two modes, selected by `BQ_ENABLED` / `SQLITE_ENABLED` (`src/database/storageMod
 Schema (`src/database/schema.js`): `users`, `chat_profiles` (per-conversation state, scoped to an
 `owner_phone`), `messages`, `notes`, `reminders`, `conversation_summaries`, `student_user_memory`,
 `token_usage` (per-message LLM cost tracking), `dashboard_users` (web logins), `bot_accounts` (one
-row per WhatsApp number/session, linked to a `dashboard_user_id`), `action_items`,
+row per WhatsApp number, linked to a `dashboard_user_id`), `action_items`,
 `push_subscriptions`.
 
 ## Single-tenant model
@@ -100,23 +115,32 @@ authoring format, chunking rules and the topic guard are in
 ## Message pipeline
 
 ```
-WhatsApp message → messageHandler.js
-   ├─ slash command? (/help, /ping, /reset, /summary, /note, /remind, /model, /tokens, /profile, /assistant, ...)
-   └─ free text → inboundMessageBatcher.js (debounces rapid multi-fragment messages, ~10s window)
-                     → chatService.js
-                          ├─ contextService.resolveMode() → CASUAL vs INTENSIVE
-                          ├─ INTENSIVE + KB-eligible? → hybrid KB retrieval → inject into prompt
-                          ├─ LLM call (OpenAI; tiered by contextState)
-                          └─ replyRules.js (firewall/sanitize) → messageSplitter.js → send
+Contact messages the business number
+   → Gallabox → POST /webhooks/gallabox (HMAC-verified, acked immediately)
+   → gallaboxBot.js (dedupe by WhatsApp message id) → messageHandler.js
+        ├─ store message (text, or media description) in `messages`
+        ├─ escalation / scope firewall / assistant on-off checks
+        └─ inboundMessageBatcher.js (debounces rapid multi-fragment messages, ~10s window)
+              → chatService.js
+                   ├─ contextService.resolveMode() → CASUAL vs INTENSIVE
+                   ├─ INTENSIVE + KB-eligible? → hybrid KB retrieval → inject into prompt
+                   ├─ LLM call (OpenAI; tiered by contextState)
+                   └─ replyRules.js (firewall/sanitize) → messageSplitter.js
+              → Gallabox REST API (send) → reply stored in `messages`
 ```
+
+There is no self-chat on the Business API, so the owner-only slash commands (`/assistant`,
+`/note`, `/tokens`, ...) are no longer reachable from WhatsApp — use the dashboard instead.
 
 ## Dashboard
 
-React + Vite SPA (`dashboard/`), built via `npm run dashboard:build` into `dashboard/dist` and
-served by Express as a static SPA with client-side routing. Talks to the backend through a thin
-fetch wrapper (`dashboard/src/api/client.js`) using a bearer token from `localStorage`.
+React + Vite SPA in `frontend/`, built and hosted by Netlify. It calls the backend only through
+relative `/api/...` URLs (`frontend/src/api/client.js`, bearer token from `localStorage`):
+Netlify forwards `/api/*` to the Render backend server-side (`frontend/netlify.toml`), and in
+local dev the Vite server does the same to `localhost:3000`. The browser therefore never makes a
+cross-origin request — no CORS setup needed.
 
-Pages: Login, Dashboard, Connect (WhatsApp QR/pairing), Conversations, ConversationDetail,
+Pages: Login, Dashboard, Connect (Gallabox status + webhook URL), Conversations, ConversationDetail,
 BotSettings, ActionItems, Account.
 
 ## REST API
@@ -127,12 +151,13 @@ All under `/api` (`src/api/dashboardRoutes.js`) unless noted:
 |---|---|
 | `/auth/*` | Login, current user, password change |
 | `/admin/sqlite-*` | SQLite backup / guard / purge |
-| `/bot/*` | WhatsApp session lifecycle — start/stop/QR/pairing-code/settings |
+| `/bot/*` | Gallabox connection status, reconnect/stop, bot settings |
 | `/notifications/*` | Web-push subscribe + notification inbox |
 | `/conversations/*` | List/sync/send, assistant toggle, CSV import/export, escalate |
 | `/action-items` | Action item tracking |
 | `/stats` | Aggregate counts |
 
+`POST /webhooks/gallabox` (`gallaboxWebhookRoutes.js`) receives inbound WhatsApp messages.
 Legacy simple GETs at root (`src/api/routes.js`): `/health`, `/users`, `/notes`, `/reminders`,
 `/knowledge-base`, `/chats`, `/stats`. `/api/test/chat` (`testApiRoutes.js`) is a synchronous
 chat endpoint used only by the Opik eval harness.
@@ -142,21 +167,27 @@ chat endpoint used only by the Opik eval harness.
 - Node.js 18+
 - FFmpeg (voice message transcription)
 - OpenAI API key
-- A phone with WhatsApp for QR/pairing-code linking
+- A Gallabox account (Essential or Advanced plan — webhooks are not on Basic) with a connected
+  WhatsApp Business number
 - Optional: a GCP project only if `BQ_ENABLED=true` (BigQuery durable storage) or if you switch
   `VECTOR_BACKEND` back to `vertex`. The default `local` KB needs neither.
 
 ## Setup
 
 ```bash
+# backend (http://localhost:3000)
+cd backend
 npm install
-npm run dashboard:install
 cp .env.example .env   # then fill in required vars — see below
-npm run dashboard:build
-npm start
+npm run dev            # node --watch; `npm start` for a plain run
+
+# frontend (http://localhost:5173, proxies /api to the backend)
+cd frontend
+npm install
+npm run dev
 ```
 
-`npm run dev` uses `node --watch` for auto-restart during development.
+Runtime data (`data/`, `logs/`, `uploads/`, `secrets/`, `.env`) lives inside `backend/`.
 
 ### Env vars (groups — see `.env.example` for the tunable subset; several required vars below aren't in that file)
 
@@ -171,7 +202,7 @@ npm start
 | Pinecone (only if `VECTOR_BACKEND=pinecone`) | `PINECONE_API_KEY`, `PINECONE_INDEX`, `PINECONE_INTEGRATED` |
 | Vertex AI / GCP (only if `VECTOR_BACKEND=vertex`) | `GCP_PROJECT_ID`, `VERTEX_REGION`, `VERTEX_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_ID`, `VERTEX_DEPLOYED_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_DOMAIN`, `GOOGLE_APPLICATION_CREDENTIALS` |
 | KB source override | `KNOWLEDGE_BASE_PATH` (defaults to `knowledge-base/nxtwave-intensive-brain-memory-kb.txt`) |
-| Bot/session | `WHATSAPP_AUTO_START`, `WHATSAPP_AUTO_START_DELAY_MS` |
+| WhatsApp (Gallabox) | `GALLABOX_API_KEY`, `GALLABOX_API_SECRET`, `GALLABOX_CHANNEL_ID`, `GALLABOX_PHONE`, `GALLABOX_WEBHOOK_SECRET`, `GALLABOX_BOT_ACCOUNT_ID` (optional) |
 | Dashboard | `DASHBOARD_CORS_ORIGIN`, `TRUST_PROXY` |
 
 ### Knowledge base setup
@@ -187,52 +218,64 @@ For a hosted backend, first `npm run vertex:setup` (or `npm run pinecone:setup`)
 `VECTOR_BACKEND`. KB file authoring format (QA-delimited `.txt` or pre-chunked `.json`) is
 documented in [docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md).
 
-### WhatsApp linking
+### WhatsApp (Gallabox) setup
 
-Start the app, open the dashboard's Connect page (or the terminal QR on first CLI run), and
-scan/pair. Sessions persist in `.wwebjs_auth/`.
+1. Gallabox → Settings → Developer → API Keys: create a key; set `GALLABOX_API_KEY` / `GALLABOX_API_SECRET`.
+2. Gallabox → Settings → Connect → WhatsApp Channel: copy the channel id into `GALLABOX_CHANNEL_ID`,
+   and set `GALLABOX_PHONE` to that number with country code (e.g. `919876543210`).
+3. Gallabox → Settings → Webhooks → Add Webhook: URL `https://<backend>/webhooks/gallabox`, event
+   `Message.Received` (optionally `Message.WA.Status.Failed`), and a secret — set the same value as
+   `GALLABOX_WEBHOOK_SECRET` (required when `NODE_ENV=production`).
+4. Turn off any Gallabox bot / auto-reply on that number, or two bots will answer.
 
-## Commands (in-chat)
+The dashboard's Connect page shows the status and the exact webhook URL to paste.
 
-| Command | Description |
-|---|---|
-| `/help` | Show all commands |
-| `/ping` | Health check |
-| `/reset` | Clear conversation history |
-| `/summary` | AI summary of chat history |
-| `/note <text>` / `/notes` | Save / list notes |
-| `/remind YYYY-MM-DD HH:MM <msg>` | Set a reminder |
-| `/model` | Show/switch model tier |
-| `/tokens` | Token usage for the conversation |
-| `/profile` / `/me` | Chat profile info |
-| `/assistant` | Toggle assistant on/off for this chat |
+Free-form replies only work within 24 hours of the contact's last message (a WhatsApp rule);
+outside that window WhatsApp requires an approved template. That affects `/remind` reminders and
+coach messages sent from the dashboard to quiet chats.
 
-**Media:** voice messages are transcribed and answered; PDFs are summarized.
+## Media
+
+Voice notes are transcribed (Whisper) and answered; PDFs are text-extracted and answered in
+context. Images, video and other files are stored and acknowledged, and also raise a
+"Call to Action" item for a coach.
 
 ## Deployment
 
-Guides per target under `deploy/`:
+### Backend → Render
 
-- **`deploy/gcp/`** — Compute Engine VM + Docker (the primary target). Default `e2-medium`
-  (Chromium + WhatsApp needs ≥4GB RAM — do not use `e2-small`). Driven by
-  `deploy/gcp/deploy.ps1`. Includes hot-patch scripts for live KB/config updates without a full
-  redeploy. See [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md).
-- **`deploy/aws/`** — parallel path for AWS.
-- **`deploy/bigquery/`** — BigQuery dataset/table setup.
+[render.yaml](render.yaml) builds `backend/Dockerfile` with `backend/` as the Docker context and
+only redeploys on changes under `backend/`. `data/` (SQLite — every conversation — plus the KB
+index) lives on Render's persistent disk, so it survives redeploys. Set the secrets marked
+`sync: false` in the Render dashboard. Render's own URL (`RENDER_EXTERNAL_URL`) is used to show
+the Gallabox webhook URL on the Connect page; set `PUBLIC_BASE_URL` to override it (custom domain).
 
-`Dockerfile` / `docker-compose.yml` at repo root run a single service, `shm_size: 2gb`,
-`mem_limit: 3g`, with `data/`, `logs/`, `knowledge-base/`, and `secrets/` (read-only) mounted as
-volumes.
+### Frontend → Netlify
+
+New site from this repo with **Base directory = `frontend`**; `frontend/netlify.toml` supplies the
+build command (`npm ci && npm run build`), publish dir (`dist`), the SPA fallback, and the
+`/api/*` proxy to `https://pulse-whatapp-bot.onrender.com` — edit that host if your Render
+service URL differs. Netlify cuts proxied requests off after ~26s, so very long dashboard
+operations (big imports/exports) should be kept under that.
+
+Gallabox webhooks go straight to Render (`https://<render-service>/webhooks/gallabox`), not via
+Netlify.
+
+### Local Docker
+
+`backend/docker-compose.yml` runs the backend (`mem_limit: 1g`) with `data/`, `logs/`,
+`knowledge-base/`, and `secrets/` (read-only) mounted as volumes:
 
 ```bash
+cd backend
 docker-compose up -d --build
-docker-compose logs -f          # QR code appears here on first run
+docker-compose logs -f
 ```
 
 ### PM2 (non-Docker)
 
 ```bash
-pm2 start src/app.js --name whatsapp-bot
+cd backend && pm2 start src/app.js --name whatsapp-bot
 pm2 save && pm2 startup
 ```
 
@@ -251,20 +294,15 @@ generation/judge noise.
 
 | Symptom | Fix |
 |---|---|
-| QR code not appearing | Ensure Chromium deps installed (Docker image includes them); delete `.wwebjs_auth/`/`.wwebjs_cache/` and restart |
-| Authentication failure | `rm -rf .wwebjs_auth .wwebjs_cache`, restart, re-scan |
+| No replies, nothing in logs | Check the Gallabox webhook URL/event; Connect page → "Last message" should update |
+| `Rejected Gallabox webhook` in logs | `GALLABOX_WEBHOOK_SECRET` doesn't match the secret on the Gallabox webhook |
+| `Gallabox not configured` at startup | One of the `GALLABOX_*` env vars is missing (listed in the log line) |
+| Reply fails with a Gallabox API error | Usually the 24h window has closed — the contact must message first, or use a template |
 | Voice messages fail | Confirm `ffmpeg -version` works; check `logs/error.log` |
 | KB / RAG issues | See the Troubleshooting table in [docs/VERTEX-PIPELINE.md](docs/VERTEX-PIPELINE.md) — every KB call now logs a correlation id, timing, and host IP |
 | AI errors | Verify `OPENAI_API_KEY`; check provider status/rate limits |
 | Database errors | Ensure `data/` is writable (disk mode); check `logs/error.log` |
-| WhatsApp disconnects | Auto-reconnects up to 10 attempts; persistent disconnects need a fresh QR scan |
 
 ## License
 
 MIT
-#   p u l s e - w h a t a p p - b o t  
- #   p u l s e - w h a t a p p - b o t  
- #   p u l s e - w h a t a p p - b o t  
- #   p u l s e - w h a t a p p - b o t  
- #   p u l s e - w h a t a p p - b o t  
- 

@@ -1,5 +1,7 @@
 # Vertex AI Vector Search Pipeline
 
+> Paths below (`src/...`, `knowledge-base/...`) are relative to `backend/`.
+
 One-page reference for the Vertex AI Vector Search backend that replaced Pinecone as the
 default KB vector store on **2026-08-17**. Covers provisioning, the indexing/search pipeline,
 every log line you'll see at each step, and how to debug a failure.

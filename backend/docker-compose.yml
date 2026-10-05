@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-ai-assistant
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 1g
+    memswap_limit: 1g
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./knowledge-base:/app/knowledge-base
+      - ./secrets:/app/secrets:ro
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=768
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -1,19 +1,28 @@
 node_modules/
 .env
-.wwebjs_auth/
-.wwebjs_auth*/
-.wwebjs_cache/
 .claude/settings.local.json
-scripts/teams-snapshot-gcp.json
-data/
-!knowledge-base/
-!knowledge-base/*.pdf
-!knowledge-base/*.txt
-logs/
-*.db
-*.log
 .DS_Store
-secrets/
+*.log
+*.db
+
+# backend runtime data / secrets
+backend/data/
+backend/logs/
+backend/uploads/
+backend/tmp/
+backend/secrets/
+backend/scripts/teams-snapshot-gcp.json
+!backend/knowledge-base/
+!backend/knowledge-base/*.pdf
+!backend/knowledge-base/*.txt
 whatsapp-bot-big query.json
 *-bq.json
 **/gcp-*-key.json
+
+# frontend build output (Netlify builds it)
+frontend/dist/
+.netlify/
+
+# old WhatsApp Web session folders, if any are left around
+.wwebjs_auth*/
+.wwebjs_cache/

@@ -1,0 +1,14 @@
+node_modules
+data
+logs
+*.log
+uploads
+tmp
+secrets
+.env
+.env.*
+*.md
+knowledge-base/*.pdf
+scripts/teams-snapshot-gcp.json
+*-bq.json
+**/gcp-*-key.json

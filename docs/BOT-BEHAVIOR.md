@@ -7,37 +7,44 @@ hood. This is a behavior reference, not an architecture map — see [../README.m
 for the file layout and storage model, and [RAG-FRAMEWORK.md](RAG-FRAMEWORK.md) for the
 knowledge-base retrieval internals.
 
-All code references are relative to `src/`.
+All code references are relative to `backend/src/`.
 
 ---
 
 ## 1. Life of one inbound WhatsApp message
 
 ```
-WhatsApp message arrives
-  → bot/whatsapp.js: message_create event
+Student messages the WhatsApp Business number
+  → Gallabox → POST /webhooks/gallabox (api/gallaboxWebhookRoutes.js)
+      - x-gallabox-signature HMAC checked against GALLABOX_WEBHOOK_SECRET → 401 if wrong
+      - acknowledged with 200 immediately; processing continues in the background
+  → bot/gallaboxBot.js: handleWebhookEvent()
+      - only `Message.Received` is processed (`Message.WA.Status.Failed` is logged)
+      - messages for another Gallabox channel are ignored
+      - duplicate deliveries of the same WhatsApp message id are dropped
+      - payload normalized (bot/gallabox/inboundMessage.js): text, button/list replies,
+        location and contact cards become text; image/audio/video/document/sticker are media
   → bot/messageHandler.js: handleMessage()
-      - filter: groups/broadcasts/channels/status ignored outright
-      - resolve chat_profile (self-chat vs contact chat)
-      - is this a bot echo of its own reply? → dropped
-      - is this a slash command? → routed to commands/*, answered immediately, skips
-        batching/KB/AI entirely
-      - is assistant disabled for this chat? → message is stored, nothing is sent back
-  → contact chats only: queued in the inbound batcher (see §2)
+      - resolve chat_profile (re-attaches an older profile for the same phone if one exists)
+      - message (or a media description) is stored in the messages table
+      - escalation check (see §9)
+      - is assistant disabled for this chat? → stored, nothing is sent back
+      - scope firewall (off by default)
+  → queued in the inbound batcher (see §2)
   → chatService.generateResponse()
       - resolve conversation mode: casual / intensive (KB) / guru (see §4)
       - build time-windowed history + context note (see §5)
       - if intensive mode: run KB retrieval (see RAG-FRAMEWORK.md)
       - build system prompt + call OpenAI (see §7)
       - parse the structured JSON reply (assistant_message / event / conversation_end)
-  → reply delay + typing indicator, if configured (see §3)
-  → message split into WhatsApp-sized chunks (ai/messageSplitter.js) and sent
+  → reply delay, if configured (see §3)
+  → message split into WhatsApp-sized chunks (ai/messageSplitter.js) and sent via the
+    Gallabox REST API
   → reply stored in the messages table
 ```
 
-Self-chat messages (you messaging your own number) skip the batcher and go straight to
-`generateResponse()` — batching only applies to **contact** chats, where a student is
-typing multiple lines in quick succession.
+Every message is a contact chat — the WhatsApp Business API has no self-chat, so there
+is no owner "Message Yourself" thread and no owner messages to mirror.
 
 ---
 
@@ -52,9 +59,7 @@ resets a timer; when the timer fires, everything queued so far is combined into 
   dashboard, DB default **10s**, clamped to **0–300s** (`MAX_BATCH_DELAY_SECONDS`,
   `utils/constants.js`). Setting it to 0 answers each message immediately with no
   combining.
-- A typing indicator starts as soon as the *first* fragment in a batch is queued
-  (`onQueued` callback), so the student sees "typing..." for the whole window, not just
-  after it ends.
+- No typing indicator is shown — Gallabox's API has no typing call.
 - If 2+ fragments land in the same window, they're combined into one prompt like:
   `"The student sent 3 messages within a few seconds. Treat them as one turn."` followed
   by each message numbered — the model answers all of them together.
@@ -67,10 +72,10 @@ sent — separate from the batching window above:
 - **Default: 0 seconds** (`reply_delay_seconds` on `bot_accounts`, DB default `0` — off
   unless configured in the dashboard).
 - Configurable **0–120s** (`MAX_REPLY_DELAY_SECONDS`, `utils/constants.js`).
-- While waiting, the bot keeps sending WhatsApp's "typing..." indicator
-  (`whatsapp.js: waitBeforeReply()`), refreshed roughly every 20s so it doesn't expire
-  mid-wait.
-- Slash-command replies **skip this delay entirely** — they're always instant.
+- The wait is silent (no typing indicator — see §2).
+- **24-hour rule:** free-form replies only go through within 24 hours of the student's
+  last message. A long delay never comes close, but coach messages from the dashboard and
+  `/remind` reminders to a quiet chat will be refused by WhatsApp outside that window.
 
 **So the real end-to-end reply time for a normal contact message is:**
 `batch window (default 10s, waits for a pause in typing) + LLM generation time (typically
@@ -168,15 +173,12 @@ citing facts, more natural for small talk.
 
 ## 8. Assistant on/off control
 
-- **Self-chat**: controlled by `assistant_self_enabled` on the user record. Toggle via
-  `/assistant self on|off` (sent from your own self-chat).
-- **Contacts globally**: `/assistant contacts on|off` (all contact chats at once), or
-  `/assistant contacts all off` / per-contact `/assistant contact: Name on|off` for one
-  person. A per-contact override always wins over the global contacts toggle.
-- **`/pause` (or `/stop`)**: pauses the assistant in *that one contact chat* for
-  **5 minutes** (`ASSISTANT_PAUSE_MS`, `utils/constants.js`) — meant for a coach
-  stepping in to answer manually without permanently disabling the bot. `/start` (or
-  `/resume`) ends the pause early.
+- **Per chat / all contacts**: the AI toggles in the dashboard (Conversations list and
+  Bot Settings). A per-contact override always wins over the global contacts toggle.
+- The old WhatsApp-side controls (`/assistant ...` from self-chat, `/pause` / `/start`
+  typed by the owner inside a contact chat) no longer exist — on the Business API the
+  owner never sends from the bot's own WhatsApp. A coach who wants to step in turns the AI
+  off for that chat in the dashboard, or replies from Gallabox's inbox.
 - When assistant is disabled for a chat, inbound messages are still stored (so history
   isn't lost) but no AI reply is generated or sent.
 
@@ -199,63 +201,51 @@ media or a URL automatically creates a "Call to Action" item in the dashboard qu
 currently send an automatic reply of their own (`autoReply` is always `null` in the
 current implementation) — they only ever create a dashboard queue item.
 
-## 10. Slash commands
+## 10. Slash commands and media
 
-Full catalog with syntax/examples: `config/commandCatalog.js` (also rendered by `/help`
-and the dashboard). Quick reference:
+Slash commands were owner tools typed into WhatsApp's "Message Yourself" chat. The
+WhatsApp Business API has no self-chat, so **none of them are reachable from WhatsApp any
+more**; their effects live in the dashboard (AI toggles, Bot Settings, token usage). A
+student who types something starting with `/` just gets a normal AI answer. The
+`commands/*` modules and `config/commandCatalog.js` are still in the tree but unused by the
+message path.
 
-| Command | Where | What it actually does |
-|---|---|---|
-| `/help` | any chat | Lists commands + persona |
-| `/ping` | any chat | "Pong 🟢" liveness check |
-| `/reset` | any chat | **Only clears the routing-slot memory** (tracked topic/program-track/GC), not the stored message history — despite being labeled "Clears stored conversation history." The `messages` table is untouched. |
-| `/summary` | any chat | Generates an AI summary of recent messages, always via the **Smart** model tier |
-| `/me` | self-chat | Shows assistant name/persona |
-| `/tokens` | self-chat | OpenAI token usage breakdown |
-| `/contacts` | self-chat | Lists synced personal chats |
-| `/profile` | any (view) / self-chat (edit) | Per-contact role/relations metadata used in the prompt |
-| `/assistant ...` | self-chat | See §8 |
-| `/pause`, `/stop`, `/start`, `/resume` | contact chats | See §8 |
-| `/model fast\|smart` | self-chat | Sets a preference that — see §7 — doesn't currently affect live chat replies |
-| `/note <text>`, `/notes` | self-chat | Personal notes, unrelated to chat context |
-| `/remind YYYY-MM-DD HH:MM <text>` | self-chat | Schedules a WhatsApp reminder; checked every minute (`REMINDER_CHECK_CRON`) |
-| voice note | any | Transcribed via Whisper, then answered like text |
-| PDF document | any | Text extracted (truncated to 12,000 chars) and answered in context |
+| Media | What happens |
+|---|---|
+| voice note / audio | Downloaded from Gallabox, transcribed via Whisper, then answered like text |
+| PDF document | Text extracted (truncated to 12,000 chars) and answered in context |
+| image, video, sticker, other files | Stored as a description (type + caption), acknowledged by the AI, and a "Call to Action" item is raised (see §9) |
+| location, contact card | Turned into a short text line ("[Shared a location: ...]") and answered |
+| button / list reply | The tapped option's title is treated as the message text |
 
-## 11. WhatsApp connection lifecycle
+Media download uses the first URL in Gallabox's media object; if a payload carries no URL,
+the message is still stored and answered from its caption alone.
 
-- **QR/pairing**: a fresh QR is generated roughly every 20s until scanned (WhatsApp's own
-  cadence, not configurable here). If no QR has been produced within **45s**
-  (`WHATSAPP_QR_GRACE_MS`) of starting a link attempt, the client restarts the link flow.
-- **No pinned WhatsApp Web version** — the client loads whatever WhatsApp Web is actually
-  serving live rather than an archived snapshot (see `bot/whatsapp.js:
-  resolveWebVersionCache()`), since the underlying library lags WhatsApp's release pace.
-  `WHATSAPP_WEB_VERSION_URL` can still force a pinned build if a future WhatsApp release
-  regresses this.
-- **Auth backfill safety net**: WhatsApp Web's own `loading_screen` (post-authentication)
-  event backfills internal auth state if the library's `authenticated` event is late or
-  missing — closing a gap that used to let an auth-mode toggle disrupt an already-linked
-  session.
-- **Auth-sync stuck timeout: 10 minutes** (`WHATSAPP_AUTH_SYNC_STUCK_MS`) — if the client
-  authenticates but never reaches fully "ready" within 10 minutes, the session is
-  cleared and the QR flow restarts from scratch.
-- **Reconnects**: on an unexpected disconnect, the client retries with backoff —
-  `RECONNECT_DELAY_MS` (10s) × attempt number, capped at 6× (so up to 60s between
-  attempts), up to `MAX_RECONNECT_ATTEMPTS` (15) before giving up and surfacing an error
-  status.
+## 11. WhatsApp connection (Gallabox)
+
+- **No session to keep alive.** The number is connected inside Gallabox; this server only
+  needs `GALLABOX_API_KEY`, `GALLABOX_API_SECRET`, `GALLABOX_CHANNEL_ID` and
+  `GALLABOX_PHONE`. The bot is marked ready at startup if they're all set; missing keys are
+  logged and shown on the dashboard's Connect page.
+- **Which dashboard account owns the number**: `GALLABOX_BOT_ACCOUNT_ID` if set, else the
+  account that previously held this phone (so old chat history stays attached), else the
+  first dashboard user's account (`bot/botManager.js: resolveGallaboxAccountId()`).
+- **Webhook security**: with `GALLABOX_WEBHOOK_SECRET` set, every webhook must carry a
+  valid `x-gallabox-signature` (base64 HMAC-SHA256 of the raw body). In production the
+  webhook is refused entirely until a secret is configured.
+- **Retries / duplicates**: the last 5,000 WhatsApp message ids are remembered in memory, so
+  a redelivered webhook is not answered twice (a restart clears this memory).
 - **Error-reply cooldown**: if message handling throws, the generic "Oops, something
-  glitched" reply is rate-limited to once per **2 minutes** per chat
-  (`ERROR_REPLY_COOLDOWN_MS`) so a repeated failure doesn't spam the student.
+  glitched" reply (or, for media, "Got it — I've received your file") is rate-limited to
+  once per **2 minutes** per chat (`ERROR_REPLY_COOLDOWN_MS`).
 
 ## 12. Background jobs
 
 | Job | Interval | Purpose |
 |---|---|---|
-| Reminder check | every minute (cron `* * * * *`) | Sends any due `/remind` reminders |
+| Reminder check | every minute (cron `* * * * *`) | Sends any due reminders (subject to the 24h window, see §3) |
 | KB auto-refresh | 30 minutes (`KB_REINGEST_INTERVAL_MS`) | Cheaply checks the KB source file's hash; only rebuilds the (expensive) TF-IDF index if it actually changed |
-| Deferred chat sync | ~90s after WhatsApp goes ready (`CHAT_SYNC_DELAY_MS`), re-armed if the account is active | Syncs personal chats/contacts in the background, aborts immediately if a real inbound message needs the browser |
 | SQLite backup | every 24h (`SQLITE_BACKUP_INTERVAL_HOURS`) | Snapshots `data/assistant.db` to `data/sqlite-backups/` |
-| Inbound-hook watchdog | every 15s while ready | Re-confirms WhatsApp's in-page message hook is still attached, re-attaches if WhatsApp reloaded internally |
 
 ---
 
@@ -268,9 +258,7 @@ and the dashboard). Quick reference:
 | Context window (history lookback) | 60 min | 1–1440 min | `context_window_minutes` per bot |
 | Intensive-mode topic stickiness (TTL) | 15 min | — | `CONTEXT_MEMORY_TTL_MINUTES` |
 | Conversation idle → auto-ended | 3 min | — | `CONVERSATION_IDLE_TIMEOUT_MINUTES` |
-| `/pause` duration | 5 min | — | fixed (`ASSISTANT_PAUSE_MS`) |
 | Error-reply cooldown | 2 min | — | fixed (`ERROR_REPLY_COOLDOWN_MS`) |
-| QR restart grace period | 45s | — | `WHATSAPP_QR_GRACE_MS` |
-| Auth-sync stuck → forces re-link | 10 min | — | `WHATSAPP_AUTH_SYNC_STUCK_MS` |
+| Free-form reply window | 24h after the contact's last message | — | WhatsApp rule |
 | KB auto-refresh check | 30 min | — | `KB_REINGEST_INTERVAL_MS` |
 | SQLite backup | 24h | — | `SQLITE_BACKUP_INTERVAL_HOURS` |

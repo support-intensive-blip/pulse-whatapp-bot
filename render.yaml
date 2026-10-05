@@ -1,27 +1,35 @@
-# Render Blueprint — deploy the WhatsApp AI Assistant as a Docker web service.
+# Render Blueprint — deploy the backend (backend/) as a Docker web service.
+# The dashboard (frontend/) is deployed separately on Netlify and proxies /api/*
+# to this service (see frontend/netlify.toml).
 #
-# whatsapp-web.js drives a headless Chromium, so this MUST run on the Docker
-# runtime (the Dockerfile installs Chromium) — NOT Render's native Node/Go env.
+# WhatsApp now goes through Gallabox (WhatsApp Business API): inbound messages
+# arrive as webhooks at https://<service>.onrender.com/webhooks/gallabox and
+# replies go out over the Gallabox REST API. No Chromium / QR scan any more.
 #
 # Apply: push this file, then in Render → "New +" → "Blueprint" → pick this repo.
-# After the first deploy, open https://<service>.onrender.com and scan the QR
-# (or use the pairing-code flow) from the dashboard's Connect page.
+# After the first deploy, add a webhook in Gallabox (Settings → Webhooks):
+#   URL     https://<service>.onrender.com/webhooks/gallabox
+#   Events  Message.Received (and optionally Message.WA.Status.Failed)
+#   Secret  same value as GALLABOX_WEBHOOK_SECRET below
 services:
   - type: web
     name: pulse-whatapp-bot
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # Only redeploy when backend files change (frontend edits deploy on Netlify).
+    buildFilter:
+      paths:
+        - backend/**
     region: oregon
-    # Chromium + Node + SQLite need real memory. Starter (512MB) will OOM once
-    # WhatsApp Web loads — use Standard (2GB) or larger.
+    # Without Chromium the container needs far less memory; Starter (512MB) is
+    # likely enough now, but this stays on Standard until that's been verified.
     plan: standard
     healthCheckPath: /health
     autoDeploy: true
     # Render allows exactly one disk. It's mounted at /app/persist and holds
-    # BOTH the WhatsApp session AND data/ (SQLite conversation memory + local
-    # KB index) as subfolders — docker-entrypoint.sh symlinks .wwebjs_auth and
-    # data into it. Previously only the WhatsApp session was on the disk, so
-    # conversation memory and the KB index were wiped on every redeploy/restart.
+    # data/ (SQLite conversation history + local KB index) — docker-entrypoint.sh
+    # symlinks /app/data into it so every conversation survives redeploys.
     disk:
       name: wwebjs-session
       mountPath: /app/persist
@@ -31,19 +39,6 @@ services:
         value: production
       - key: PORT
         value: "3000"
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "true"
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: /usr/bin/chromium
-      # Keep Chromium's heap modest so the container stays under the plan limit.
-      - key: CHROMIUM_JS_HEAP_MB
-        value: "512"
-      # No WHATSAPP_WEB_VERSION_URL pin: the client now loads whatever WhatsApp
-      # Web is actually serving live (see resolveWebVersionCache in
-      # src/bot/whatsapp.js). Only add this var back — pointing at a snapshot
-      # from github.com/wppconnect-team/wa-version/tree/main/html — if login
-      # regresses after a WhatsApp Web release and an older pinned build is
-      # confirmed to fix it.
       - key: VECTOR_BACKEND
         value: local
       - key: OPENAI_MODEL_SMART
@@ -59,3 +54,15 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      - key: GALLABOX_API_KEY
+        sync: false
+      - key: GALLABOX_API_SECRET
+        sync: false
+      - key: GALLABOX_CHANNEL_ID
+        sync: false
+      - key: GALLABOX_ACCOUNT_ID
+        sync: false
+      - key: GALLABOX_PHONE
+        sync: false
+      - key: GALLABOX_WEBHOOK_SECRET
+        sync: false

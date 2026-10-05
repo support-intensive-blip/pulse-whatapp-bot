@@ -1,0 +1,40 @@
+# Netlify site for the dashboard. In Netlify: Base directory = frontend
+# (everything below is then relative to frontend/).
+
+[build]
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# The browser only ever talks to this Netlify origin; Netlify forwards /api/* to
+# the Render backend server-side, so there is no cross-origin request and no CORS.
+# Change the host if your Render service URL differs.
+[[redirects]]
+  from = "/api/*"
+  to = "https://pulse-whatapp-bot.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# SPA: every other path is a client-side route.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
