@@ -62,7 +62,6 @@ function MoveBotModal({ bot, teams, currentTeam, onClose, onMoved }) {
       }
     >
       {error && <Alert tone="error" className="mb-4">{error}</Alert>}
-      {notice && <Alert tone="success" className="mb-4" onDismiss={() => setNotice('')}>{notice}</Alert>}
       {!targets.length ? (
         <p className="text-sm text-ink-muted">Create another team first under Teams.</p>
       ) : (
@@ -199,6 +198,7 @@ export default function Bots() {
         }
       />
       {error && <Alert tone="error" className="mb-4">{error}</Alert>}
+      {notice && <Alert tone="success" className="mb-4" onDismiss={() => setNotice('')}>{notice}</Alert>}
       {!bots ? (
         <div className="flex justify-center py-16"><Spinner /></div>
       ) : !bots.length ? (
