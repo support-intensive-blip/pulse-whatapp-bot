@@ -4,7 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
 const { initializeDatabaseAsync, closeDatabase } = require('./database/db');
-const { isBigQueryPrimary } = require('./database/storageMode');
+const { isBigQueryPrimary, isSupabaseEnabled, isSupabasePrimary } = require('./database/storageMode');
+const supabaseClient = require('./services/supabaseClient');
 const bigqueryService = require('./services/bigqueryService');
 const botManager = require('./bot/botManager');
 const { createRouter } = require('./api/routes');
@@ -43,7 +44,17 @@ function validateEnvironment() {
     logger.error('OPENAI_API_KEY is required. Copy .env.example to .env and set your API key.');
     process.exit(1);
   }
-  if (isBigQueryPrimary()) {
+  if (isSupabaseEnabled()) {
+    if (!supabaseClient.isConfigured()) {
+      logger.error('SUPABASE_ENABLED=true requires SUPABASE_URL and SUPABASE_SECRET_KEY in .env');
+      process.exit(1);
+    }
+    logger.info(
+      isSupabasePrimary()
+        ? 'Storage: Supabase-primary (in-memory SQLite cache, no disk SQLite)'
+        : 'Storage: disk SQLite + Supabase write-through'
+    );
+  } else if (isBigQueryPrimary()) {
     if (!bigqueryService.isEnabled()) {
       logger.error('BigQuery-primary mode requires BQ_ENABLED=true and GCP_PROJECT_ID in .env');
       process.exit(1);
@@ -182,6 +193,9 @@ async function shutdown(signal) {
     const { flushAllPendingSyncs } = require('./database/bqSync');
     const db = getDatabase();
     flushAllPendingSyncs(db);
+    if (isSupabaseEnabled()) {
+      await require('./database/supabaseSync').stopSupabaseSync(db);
+    }
     try {
       db.pragma('wal_checkpoint(TRUNCATE)');
     } catch (_error) {

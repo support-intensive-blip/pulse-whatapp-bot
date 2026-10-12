@@ -1,12 +1,92 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, BookOpen, MessageSquare, Plus, Settings2 } from 'lucide-react';
+import { ArrowRightLeft, Bot, BookOpen, MessageSquare, Plus, Settings2 } from 'lucide-react';
 import { botsApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { AiStatusBadge, Alert, ButtonLink, Card, ConnectionBadge, EmptyState, SectionHeader, Spinner, formatPhone } from '../components/ds';
+import {
+  AiStatusBadge,
+  Alert,
+  Button,
+  ButtonLink,
+  Card,
+  ConnectionBadge,
+  EmptyState,
+  Modal,
+  SectionHeader,
+  Select,
+  Spinner,
+  formatPhone,
+} from '../components/ds';
 import { formatISTDateTime } from '../utils/time';
 
-function BotCard({ bot }) {
+/** Owner only: move a number (with its chats, CTAs and knowledge) to another team. */
+function MoveBotModal({ bot, teams, currentTeam, onClose, onMoved }) {
+  const targets = teams.filter((t) => t.id !== currentTeam?.id);
+  const [teamId, setTeamId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setTeamId(targets[0]?.id ? String(targets[0].id) : '');
+    setError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot?.id]);
+
+  async function move() {
+    setBusy(true);
+    setError('');
+    try {
+      onMoved(await botsApi.move(bot.id, Number(teamId)));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const target = targets.find((t) => String(t.id) === teamId);
+  return (
+    <Modal
+      open={Boolean(bot)}
+      onClose={busy ? undefined : onClose}
+      size="sm"
+      title="Move to another team"
+      subtitle={bot ? `${bot.name} · ${formatPhone(bot.whatsappPhone)}` : ''}
+      footer={
+        <>
+          <Button variant="secondary" size="md" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button size="md" onClick={move} disabled={busy || !teamId}>
+            {busy ? 'Moving…' : 'Move number'}
+          </Button>
+        </>
+      }
+    >
+      {error && <Alert tone="error" className="mb-4">{error}</Alert>}
+      {notice && <Alert tone="success" className="mb-4" onDismiss={() => setNotice('')}>{notice}</Alert>}
+      {!targets.length ? (
+        <p className="text-sm text-ink-muted">Create another team first under Teams.</p>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <Select label="Destination team" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}{t.isActive === false ? ' (inactive)' : ''}
+              </option>
+            ))}
+          </Select>
+          <ul className="list-disc space-y-1.5 pl-5 text-ink-muted">
+            <li>Its conversations, contacts and Call-to-Actions move with it.</li>
+            <li>Its linked knowledge is copied into {target?.name || 'the new team'} ({currentTeam?.name || 'this team'} keeps its copy).</li>
+            <li>Chats and CTAs assigned to {currentTeam?.name || 'this team'}'s users become unassigned.</li>
+            {target?.isActive === false && <li className="text-amber-700">The destination team is inactive, so the bot will stop replying.</li>}
+          </ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function BotCard({ bot, onMove }) {
   const { connection, gallabox } = bot;
   return (
     <Card className="flex flex-col">
@@ -62,27 +142,49 @@ function BotCard({ bot }) {
         <Alert tone="error" className="mt-3 text-xs">{bot.lastError}</Alert>
       )}
 
-      <div className="mt-auto pt-4">
-        <ButtonLink to={`/bots/${bot.id}`} variant="secondary" size="sm" className="w-full">
+      <div className="mt-auto flex gap-2 pt-4">
+        <ButtonLink to={`/bots/${bot.id}`} variant="secondary" size="sm" className="flex-1">
           <Settings2 size={14} /> Configure
         </ButtonLink>
+        {onMove && (
+          <Button variant="secondary" size="sm" onClick={() => onMove(bot)} title="Move to another team">
+            <ArrowRightLeft size={14} /> Move
+          </Button>
+        )}
       </div>
     </Card>
   );
 }
 
 export default function Bots() {
-  const { team, scopeVersion } = useAuth();
+  const { team, teams, isOwner, refresh, scopeVersion } = useAuth();
   const [bots, setBots] = useState(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [moving, setMoving] = useState(null);
 
-  useEffect(() => {
+  function load() {
     setBots(null);
     botsApi
       .list()
       .then((data) => setBots(data.bots))
       .catch((err) => setError(err.message));
-  }, [scopeVersion, team?.id]);
+  }
+
+  useEffect(load, [scopeVersion, team?.id]);
+
+  function handleMoved(result) {
+    setMoving(null);
+    const extras = [
+      result.copiedResources ? `${result.copiedResources} knowledge resource(s) copied` : '',
+      result.clearedChatAssignments + result.clearedCtaAssignments
+        ? `${result.clearedChatAssignments + result.clearedCtaAssignments} assignment(s) cleared`
+        : '',
+    ].filter(Boolean);
+    setNotice(`${result.bot.name} moved to ${result.toTeam.name}${extras.length ? ` · ${extras.join(' · ')}` : ''}.`);
+    refresh();
+    load();
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -109,9 +211,12 @@ export default function Bots() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {bots.map((bot) => (
-            <BotCard key={bot.id} bot={bot} />
+            <BotCard key={bot.id} bot={bot} onMove={isOwner && teams.length > 1 ? setMoving : null} />
           ))}
         </div>
+      )}
+      {isOwner && (
+        <MoveBotModal bot={moving} teams={teams} currentTeam={team} onClose={() => setMoving(null)} onMoved={handleMoved} />
       )}
       <p className="mt-6 text-xs text-ink-muted">
         A number must have Gallabox's own bot / auto-reply turned off, otherwise two bots answer. See{' '}

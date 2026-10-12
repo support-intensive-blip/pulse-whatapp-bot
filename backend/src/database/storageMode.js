@@ -1,5 +1,18 @@
+function isSupabaseEnabled() {
+  return process.env.SUPABASE_ENABLED === 'true';
+}
+
+// Supabase-primary: SQLite runs in memory as a cache, hydrated from Supabase on every boot.
+function isSupabasePrimary() {
+  return isSupabaseEnabled() && process.env.SQLITE_ENABLED === 'false';
+}
+
 function isBigQueryPrimary() {
-  return process.env.BQ_ENABLED === 'true' && process.env.SQLITE_ENABLED === 'false';
+  return (
+    process.env.BQ_ENABLED === 'true' &&
+    process.env.SQLITE_ENABLED === 'false' &&
+    !isSupabaseEnabled()
+  );
 }
 
 function isSqlitePersisted() {
@@ -11,6 +24,8 @@ function getServerSource() {
 }
 
 module.exports = {
+  isSupabaseEnabled,
+  isSupabasePrimary,
   isBigQueryPrimary,
   isSqlitePersisted,
   getServerSource,

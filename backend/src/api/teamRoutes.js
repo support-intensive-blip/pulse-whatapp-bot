@@ -5,7 +5,10 @@ const { botAccountService } = require('../services/botAccountService');
 const { auditLogService } = require('../services/auditLogService');
 const conversationService = require('../services/conversationService');
 const { actionItemService, OPEN_STATUSES } = require('../services/actionItemService');
+const { botTransferService } = require('../services/botTransferService');
+const knowledgeBaseService = require('../services/knowledgeBaseService');
 const botManager = require('../bot/botManager');
+const logger = require('../utils/logger');
 const { requireAuth, requireRole } = require('./middleware/auth');
 
 /** Owner-only: teams, their admins, and the platform overview. */
@@ -113,6 +116,59 @@ function createTeamRouter() {
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
+  });
+
+  /** Moves a WhatsApp number (bot) to another team, e.g. out of the default team: { teamId } */
+  router.post('/bots/:botId/move', ...ownerOnly, async (req, res) => {
+    let moved;
+    try {
+      moved = botTransferService.moveBot(parseInt(req.params.botId, 10), parseInt(req.body?.teamId, 10), {
+        userId: req.dashboardUser.id,
+      });
+    } catch (error) {
+      return res.status(error.message === 'Bot not found' ? 404 : 400).json({ error: error.message });
+    }
+
+    const meta = {
+      name: moved.bot.name,
+      fromTeamId: moved.fromTeam?.id || null,
+      fromTeamName: moved.fromTeam?.name || null,
+      toTeamId: moved.toTeam.id,
+      toTeamName: moved.toTeam.name,
+      copiedResources: moved.copiedResources,
+      clearedChatAssignments: moved.clearedChatAssignments,
+      clearedCtaAssignments: moved.clearedCtaAssignments,
+    };
+    // Logged on both sides so each team's audit trail shows the number leaving / arriving.
+    for (const teamId of new Set([moved.fromTeam?.id, moved.toTeam.id].filter(Boolean))) {
+      auditLogService.record({
+        actorUserId: req.dashboardUser.id,
+        teamId,
+        action: 'bot.move',
+        targetType: 'bot',
+        targetId: moved.bot.id,
+        meta,
+      });
+    }
+
+    // The new team may be inactive (bot stops) and the KB resources may have new ids.
+    try {
+      await botManager.restartBot(moved.bot.id);
+    } catch (error) {
+      logger.error(`Bot ${moved.bot.id} restart after move failed: ${error.message}`);
+    }
+    knowledgeBaseService.initializeBot(botAccountService.findById(moved.bot.id)).catch((error) => {
+      logger.warn(`KB reindex for moved bot ${moved.bot.id} failed: ${error.message}`);
+    });
+
+    return res.json({
+      bot: botAccountService.toPublic(botAccountService.findById(moved.bot.id)),
+      fromTeam: teamService.toPublic(moved.fromTeam),
+      toTeam: teamService.toPublic(moved.toTeam),
+      copiedResources: moved.copiedResources,
+      clearedChatAssignments: moved.clearedChatAssignments,
+      clearedCtaAssignments: moved.clearedCtaAssignments,
+    });
   });
 
   router.get('/audit-log', ...ownerOnly, (req, res) => {

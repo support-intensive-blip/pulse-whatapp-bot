@@ -67,3 +67,11 @@ services:
         sync: false
       - key: GALLABOX_WEBHOOK_SECRET
         sync: false
+      # Supabase = durable store (disk SQLite stays as the local cache).
+      # Run backend/supabase/schema.sql in Supabase, then set SUPABASE_ENABLED=true.
+      - key: SUPABASE_ENABLED
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false

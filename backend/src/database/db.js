@@ -6,19 +6,25 @@ const { runPlatformMigrations } = require('./platformMigrations');
 const { DATA_DIR, DB_FILENAME } = require('../utils/constants');
 const { ensureDir } = require('../utils/helpers');
 const logger = require('../utils/logger');
-const { isBigQueryPrimary, isSqlitePersisted } = require('./storageMode');
+const {
+  isBigQueryPrimary,
+  isSqlitePersisted,
+  isSupabaseEnabled,
+  isSupabasePrimary,
+} = require('./storageMode');
 const { hydrateFromBigQuery } = require('./bqHydrate');
 const { wrapDatabaseForBqSync } = require('./bqSync');
+const supabaseSync = require('./supabaseSync');
 
 let db = null;
 let bqReady = false;
 
 function getDbPath() {
   if (!isSqlitePersisted()) {
-    if (!isBigQueryPrimary()) {
+    if (!isBigQueryPrimary() && !isSupabasePrimary()) {
       throw new Error(
-        'Invalid storage config: SQLITE_ENABLED=false requires BQ_ENABLED=true (BigQuery-primary mode). ' +
-          'Set BQ_ENABLED=true or SQLITE_ENABLED=true in .env.'
+        'Invalid storage config: SQLITE_ENABLED=false requires SUPABASE_ENABLED=true or BQ_ENABLED=true. ' +
+          'Set one of them, or SQLITE_ENABLED=true, in .env.'
       );
     }
     return ':memory:';
@@ -546,7 +552,13 @@ function initializeDatabase() {
     db.exec(SCHEMA_SQL);
     runMigrations(db);
 
-    if (isBigQueryPrimary()) {
+    // Triggers live in the DB file; they're re-created after hydrate (or not at all
+    // when Supabase is off, so a disabled sync can't grow the outbox forever).
+    supabaseSync.dropSyncTriggers(db);
+
+    if (isSupabasePrimary()) {
+      logger.info('Database initialized in-memory (Supabase-primary mode)');
+    } else if (isBigQueryPrimary()) {
       logger.info('Database initialized in-memory (BigQuery-primary mode)');
     } else {
       logger.info(`Database initialized at ${dbPath}`);
@@ -582,9 +594,71 @@ function finishPostInit(database) {
   recoverTokenUsageFromDisk(database);
 }
 
+async function initializeSupabase(database) {
+  supabaseSync.ensureSyncTables(database);
+
+  if (isSupabasePrimary()) {
+    // In-memory cache: Supabase is the only copy, load it every boot.
+    await supabaseSync.checkSupabaseSchema(database);
+    await supabaseSync.hydrateFromSupabase(database);
+  } else {
+    // Disk SQLite is still a full copy: if Supabase is down or not set up yet,
+    // boot anyway and let changes queue in the outbox until it's reachable.
+    try {
+      await supabaseSync.checkSupabaseSchema(database);
+    } catch (error) {
+      logger.error(`Supabase unavailable; changes will queue locally: ${error.message}`);
+      supabaseSync.installSyncTriggers(database);
+      supabaseSync.startSupabaseSyncScheduler(database);
+      return;
+    }
+    // Disk SQLite: seed from Supabase only into an empty DB, never over local data.
+    const msgs = messageCount(database);
+    const forceHydrate = String(process.env.SUPABASE_HYDRATE_ON_START || '').toLowerCase() === 'true';
+    const hydrateIfEmpty =
+      String(process.env.SUPABASE_HYDRATE_IF_EMPTY || 'true').toLowerCase() !== 'false';
+    if (forceHydrate || (hydrateIfEmpty && msgs === 0)) {
+      logger.info(`Seeding disk SQLite from Supabase (force=${forceHydrate}, messages=${msgs})…`);
+      await supabaseSync.hydrateFromSupabase(database);
+    } else {
+      logger.info(`Disk SQLite kept as source of truth (messages=${msgs}); skipping Supabase hydrate`);
+    }
+  }
+
+  supabaseSync.installSyncTriggers(database);
+  supabaseSync.startSupabaseSyncScheduler(database);
+
+  // First boot with Supabase on a disk DB: copy everything already in SQLite.
+  if (!isSupabasePrimary() && !supabaseSync.getState(database, 'backfilled_at')) {
+    logger.info('Supabase: backfilling existing SQLite data in the background…');
+    supabaseSync
+      .pushAllToSupabase(database)
+      .then((total) => {
+        supabaseSync.setState(database, 'backfilled_at', new Date().toISOString());
+        logger.info(`Supabase backfill complete (${total} rows)`);
+      })
+      .catch((error) => {
+        logger.error(`Supabase backfill failed (retries next boot): ${error.message}`);
+      });
+  }
+}
+
 async function initializeDatabaseAsync() {
   const database = initializeDatabase();
   const bqEnabled = process.env.BQ_ENABLED === 'true';
+
+  if (isSupabaseEnabled()) {
+    if (!bqReady) {
+      await initializeSupabase(database);
+      if (bqEnabled) {
+        wrapDatabaseForBqSync(database);
+        logger.info('BigQuery write-through sync enabled alongside Supabase');
+      }
+      finishPostInit(database);
+      bqReady = true;
+    }
+    return database;
+  }
 
   // BigQuery-primary: in-memory cache, hydrate every boot.
   if (isBigQueryPrimary()) {
@@ -630,15 +704,15 @@ async function initializeDatabaseAsync() {
 }
 
 function isBigQueryReady() {
-  return !isBigQueryPrimary() || bqReady;
+  return !(isBigQueryPrimary() || isSupabasePrimary()) || bqReady;
 }
 
 function getDatabase() {
   if (!db) {
     initializeDatabase();
   }
-  if (isBigQueryPrimary() && !bqReady) {
-    throw new Error('BigQuery hydrate not complete — call initializeDatabaseAsync() at startup');
+  if ((isBigQueryPrimary() || isSupabasePrimary()) && !bqReady) {
+    throw new Error('Database hydrate not complete — call initializeDatabaseAsync() at startup');
   }
   return db;
 }

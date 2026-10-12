@@ -9,7 +9,9 @@
     "ingest-kb": "node src/scripts/ingest-knowledge-base.js",
     "check:isolation": "node scripts/check-multi-bot-isolation.js",
     "pinecone:setup": "node src/scripts/setup-pinecone.js",
-    "vertex:setup": "node src/scripts/setup-vertex-vector-search.js"
+    "vertex:setup": "node src/scripts/setup-vertex-vector-search.js",
+    "supabase:schema": "node src/scripts/generate-supabase-schema.js",
+    "supabase:migrate": "node src/scripts/migrate-sqlite-to-supabase.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -27,6 +29,7 @@
     "@google-cloud/bigquery": "^8.3.1",
     "@google-cloud/firestore": "^9.0.0",
     "@pinecone-database/pinecone": "^8.0.0",
+    "@supabase/supabase-js": "^2.117.3",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.10.0",

@@ -198,6 +198,8 @@ export const botsApi = {
   updateCredentials: (id, body) => api(`/bots/${id}/credentials`, botOpts({ method: 'PUT', body, timeoutMs: 30000 })),
   testConnection: (body) => api('/bots/test-connection', botOpts({ method: 'POST', body, timeoutMs: 20000 })),
   testSaved: (id) => api(`/bots/${id}/test-connection`, botOpts({ method: 'POST', timeoutMs: 20000 })),
+  // Owner only: move the number to another team.
+  move: (id, teamId) => api(`/bots/${id}/move`, botOpts({ method: 'POST', body: { teamId }, timeoutMs: 30000 })),
   restart: (id) => api(`/bots/${id}/restart`, botOpts({ method: 'POST', timeoutMs: 30000 })),
   prompt: (id) => api(`/bots/${id}/prompt`, botOpts()),
   publishPrompt: (id, content, note) => api(`/bots/${id}/prompt`, botOpts({ method: 'PUT', body: { content, note } })),
