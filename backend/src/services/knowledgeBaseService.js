@@ -9,6 +9,7 @@ const kbChunkUtils = require('./kbChunkUtils');
 const kbLlmContext = require('./kbLlmContext');
 const kbSearchQueryService = require('./kbSearchQueryService');
 const intensiveConfig = require('../config/intensiveConfig');
+const { currentBot } = require('../utils/botContext');
 
 const DEFAULT_PDF_PATH = path.join(process.cwd(), intensiveConfig.KNOWLEDGE_BASE_PATH);
 
@@ -440,7 +441,76 @@ class KnowledgeBaseService {
     return state.loaded && (state.chunkCount || 0) > 0;
   }
 
+  /** Index key for a bot's own KB (resources it links to), e.g. "bot_3". */
+  botKbKey(botId) {
+    return `bot_${botId}`;
+  }
+
+  /**
+   * Builds (or loads) the bot's index when its linked resources changed. The
+   * fingerprint is cheap (resource ids + content hashes), so this can run on
+   * every message; the full text is only assembled when something changed.
+   */
+  async initializeBot(bot, { force = false } = {}) {
+    const key = this.botKbKey(bot.id);
+    if (ingestLocks.has(key)) return ingestLocks.get(key);
+
+    const { knowledgeResourceService } = require('./knowledgeResourceService');
+    const fingerprint = knowledgeResourceService.fingerprintForBot(bot);
+    const state = this.getTeamState(key);
+    if (!force && state.fingerprint === fingerprint) return this.isReady(key);
+
+    const run = (async () => {
+      if (!fingerprint) {
+        Object.assign(state, { loaded: false, chunkCount: 0, fingerprint });
+        return false;
+      }
+      try {
+        await vectorStoreService.loadFromDisk(key);
+        if (!force && (await vectorStoreService.isIndexed(key, fingerprint))) {
+          Object.assign(state, { loaded: true, chunkCount: await vectorStoreService.getChunkCount(key), fingerprint });
+          return true;
+        }
+
+        this.beginIndexJob(key, 'Indexing knowledge base…');
+        const { text } = knowledgeResourceService.textForBot(bot);
+        const indexedCount = await this.indexSourceText(key, text, fingerprint);
+        const chunkCount = indexedCount || (await vectorStoreService.getChunkCount(key));
+        Object.assign(state, { loaded: chunkCount > 0, chunkCount, fingerprint });
+        this.completeIndexJob(key, { chunkCount });
+        logger.info(`Vector KB indexed for bot ${bot.id} (${chunkCount} chunks)`);
+        return chunkCount > 0;
+      } catch (error) {
+        logger.error(`Knowledge base indexing failed for bot ${bot.id}: ${error.message}`);
+        this.failIndexJob(key, error.message);
+        return false;
+      }
+    })();
+
+    ingestLocks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      ingestLocks.delete(key);
+    }
+  }
+
   async resolveKbTeam() {
+    const bot = currentBot();
+    if (bot) {
+      const key = this.botKbKey(bot.id);
+      if (await this.initializeBot(bot)) {
+        return { useKb: true, kbTeamId: key, requestedTeamId: key, reason: 'kb', scope: 'bot' };
+      }
+      return {
+        useKb: false,
+        kbTeamId: key,
+        requestedTeamId: key,
+        reason: this.getTeamState(key).fingerprint ? 'kb_not_indexed' : 'team_kb_empty',
+        globalChunkCount: 0,
+      };
+    }
+
     await this.initialize(false, null);
     await this.syncTeamStateFromVectorStore(null);
 
@@ -868,8 +938,28 @@ class KnowledgeBaseService {
     }
   }
 
+  /** File-backed resources are re-read, then every running bot's index is brought up to date. */
   async refreshAll() {
-    await this.refresh(null);
+    const { knowledgeResourceService } = require('./knowledgeResourceService');
+    const { botAccountService } = require('./botAccountService');
+    knowledgeResourceService.syncFileBackedResources();
+    for (const bot of botAccountService.listAll({ includeInactive: false })) {
+      await this.initializeBot(bot);
+    }
+  }
+
+  /** Bot-level KB status for the dashboard (index progress, chunk count, resources). */
+  async getBotStatus(bot) {
+    const key = this.botKbKey(bot.id);
+    const state = this.getTeamState(key);
+    const stats = await vectorStoreService.getStats(key);
+    return {
+      ready: this.isReady(key),
+      chunkCount: stats.chunkCount || state.chunkCount || 0,
+      indexedAt: stats.indexedAt || null,
+      backend: stats.backend || 'local',
+      indexing: this.getIndexProgress(key),
+    };
   }
 }
 

@@ -1,13 +1,18 @@
+const { currentBot } = require('../utils/botContext');
+
+// Inside a bot context (see utils/botContext.js) the identity comes from that
+// bot's settings; env values remain the fallback for the original Intensive bot.
+
 function getAssistantName() {
-  return process.env.ASSISTANT_NAME || 'JahNavi';
+  return currentBot()?.assistant_name || process.env.ASSISTANT_NAME || 'JahNavi';
 }
 
 function getAssistantPersona() {
-  return process.env.ASSISTANT_PERSONA || `I'm ${getAssistantName()} from NxtWave.`;
+  return currentBot()?.assistant_persona || process.env.ASSISTANT_PERSONA || `I'm ${getAssistantName()} from NxtWave.`;
 }
 
 function getRoleWhenAsked() {
-  return process.env.ASSISTANT_ROLE_WHEN_ASKED || `your NxtWave success coach`;
+  return currentBot()?.assistant_role_when_asked || process.env.ASSISTANT_ROLE_WHEN_ASKED || `your NxtWave success coach`;
 }
 
 function isIdentityQuestion(text) {

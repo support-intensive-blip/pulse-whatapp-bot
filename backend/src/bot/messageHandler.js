@@ -18,6 +18,7 @@ const { ERROR_REPLY_COOLDOWN_MS, MESSAGE_ROLES, MESSAGE_SOURCES } = require('../
 const { sanitizeUserReply, applyFirewallPostReply, isConversationEndControlBody, parseStructuredReply } = require('../ai/replyRules');
 const { splitReplyIntoChunks } = require('../ai/messageSplitter');
 const { normalizePhone, sleep } = require('../utils/helpers');
+const { runWithBot } = require('../utils/botContext');
 
 const ERROR_REPLY_TEXT = "Oops, something glitched on my end — try sending that again?";
 const MEDIA_ACK_TEXT = "Got it — I've received your file. How can I help with it?";
@@ -101,6 +102,9 @@ class MessageHandler {
   }
 
   isAssistantAllowed(context, phone) {
+    // A paused bot stores every message and replies to no one.
+    if (botAccountService.isPaused(botAccountService.findById(this.getBotAccountId()))) return false;
+
     // Testing mode overrides the per-chat/global AI switches: only listed numbers get replies.
     const testAccess = botAccountService.resolveTestModeAccess(this.getBotAccountId(), phone);
     if (testAccess !== null) return testAccess;
@@ -129,6 +133,7 @@ class MessageHandler {
         chatProfile = chatProfileService.updateChatId(linked.id, chatId, ownerPhone) || linked;
       }
     }
+    const isNewChat = !chatProfile;
 
     chatProfile = chatProfileService.getOrCreate({
       chatId,
@@ -143,6 +148,12 @@ class MessageHandler {
       chatId,
     });
     chatProfile = chatProfileService.inheritAssistantFromSiblings(chatProfile);
+
+    // The bot's "default AI" setting decides whether a brand-new chat starts with AI on.
+    const bot = botAccountService.findById(this.getBotAccountId());
+    if (isNewChat && bot && bot.default_ai_on === 0) {
+      chatProfile = chatProfileService.disableAssistant(chatProfile.id) || chatProfile;
+    }
 
     return { owner, chatProfile };
   }
@@ -200,6 +211,12 @@ class MessageHandler {
         mediaType: inbound.hasMedia ? inbound.type : null,
         forceMediaOrLink: Boolean(inbound.hasMedia) || escalationService.containsUrl(escalationContent),
       });
+
+      // Paused means no outbound at all — not even escalation auto-replies (CTAs are still raised).
+      if (botAccountService.isPaused(botAccountService.findById(botAccountId))) {
+        logger.info(`Bot ${botAccountId} is paused — message stored, no reply`);
+        return;
+      }
 
       if (!assistantAllowed && !escalationResult?.autoReply) {
         if (botAccountService.resolveTestModeAccess(botAccountId, inbound.phone) === false) {
@@ -324,13 +341,16 @@ class MessageHandler {
         logger.info(
           `Flushing inbound batch profile=${chatProfileId} parts=${partCount} windowMs=${windowMs || BATCH_WINDOW_MS}`
         );
-        await this.flushContactAiBatch({
-          context,
-          outboundChatIds,
-          combined,
-          fragments,
-          partCount,
-        });
+        // The batch timer fires outside the webhook's call chain; re-enter the bot context.
+        await runWithBot(botAccountId, () =>
+          this.flushContactAiBatch({
+            context,
+            outboundChatIds,
+            combined,
+            fragments,
+            partCount,
+          })
+        );
       },
     });
   }

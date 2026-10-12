@@ -2,15 +2,16 @@
 # The dashboard (frontend/) is deployed separately on Netlify and proxies /api/*
 # to this service (see frontend/netlify.toml).
 #
-# WhatsApp now goes through Gallabox (WhatsApp Business API): inbound messages
-# arrive as webhooks at https://<service>.onrender.com/webhooks/gallabox and
-# replies go out over the Gallabox REST API. No Chromium / QR scan any more.
+# WhatsApp goes through Gallabox (WhatsApp Business API). Every connected number
+# has its own webhook: https://<service>.onrender.com/webhooks/gallabox/<botId>
+# (shown in the dashboard → AI Bots → Integration). Numbers, credentials and
+# webhook secrets are managed in the dashboard and stored encrypted with
+# JWT_SECRET — never regenerate JWT_SECRET once numbers are connected.
 #
 # Apply: push this file, then in Render → "New +" → "Blueprint" → pick this repo.
-# After the first deploy, add a webhook in Gallabox (Settings → Webhooks):
-#   URL     https://<service>.onrender.com/webhooks/gallabox
-#   Events  Message.Received (and optionally Message.WA.Status.Failed)
-#   Secret  same value as GALLABOX_WEBHOOK_SECRET below
+# The GALLABOX_* vars below are optional: on first boot they seed the first
+# number (the legacy URL https://<service>.onrender.com/webhooks/gallabox keeps
+# working for it, routed by channel id).
 services:
   - type: web
     name: pulse-whatapp-bot

@@ -5,10 +5,15 @@ const logger = require('../../utils/logger');
 const API_BASE = (process.env.GALLABOX_API_BASE || 'https://server.gallabox.com').replace(/\/+$/, '');
 const SEND_TIMEOUT_MS = 20000;
 const MEDIA_TIMEOUT_MS = 60000;
+const TEST_TIMEOUT_MS = 10000;
 // WhatsApp caps inbound media at 16MB (100MB for documents); anything above this
 // is not worth pulling into memory for a chat reply.
 const MAX_MEDIA_BYTES = parseInt(process.env.GALLABOX_MAX_MEDIA_BYTES, 10) || 25 * 1024 * 1024;
 
+/**
+ * GALLABOX_* env config. Since multi-number support each bot keeps its own
+ * credentials in bot_accounts; env only seeds the first bot at bootstrap.
+ */
 function getConfig() {
   return {
     apiKey: process.env.GALLABOX_API_KEY || '',
@@ -20,23 +25,21 @@ function getConfig() {
   };
 }
 
-function missingConfigKeys() {
-  const config = getConfig();
-  const missing = [];
-  if (!config.apiKey) missing.push('GALLABOX_API_KEY');
-  if (!config.apiSecret) missing.push('GALLABOX_API_SECRET');
-  if (!config.channelId) missing.push('GALLABOX_CHANNEL_ID');
-  if (!config.phone) missing.push('GALLABOX_PHONE');
-  return missing;
+function missingConfigKeys(config = getConfig(), { env = true } = {}) {
+  const names = env
+    ? { apiKey: 'GALLABOX_API_KEY', apiSecret: 'GALLABOX_API_SECRET', channelId: 'GALLABOX_CHANNEL_ID', phone: 'GALLABOX_PHONE' }
+    : { apiKey: 'API key', apiSecret: 'API secret', channelId: 'Channel ID', phone: 'WhatsApp number' };
+  return Object.entries(names)
+    .filter(([key]) => !config[key])
+    .map(([, label]) => label);
 }
 
-function isConfigured() {
-  return missingConfigKeys().length === 0;
+function isConfigured(config = getConfig()) {
+  return missingConfigKeys(config).length === 0;
 }
 
-function authHeaders() {
-  const { apiKey, apiSecret } = getConfig();
-  return { apiKey, apiSecret };
+function authHeaders(config) {
+  return { apiKey: config.apiKey, apiSecret: config.apiSecret };
 }
 
 function describeApiError(error) {
@@ -54,8 +57,7 @@ function describeApiError(error) {
  * window (since the contact's last inbound message) — outside it WhatsApp
  * requires an approved template and Gallabox returns an error.
  */
-async function sendText(phone, text, { recipientName = null } = {}) {
-  const { channelId } = getConfig();
+async function sendText(config, phone, text, { recipientName = null } = {}) {
   const digits = String(phone || '').replace(/\D/g, '');
   if (!digits) throw new Error('No recipient phone number');
 
@@ -63,13 +65,13 @@ async function sendText(phone, text, { recipientName = null } = {}) {
     const { data } = await axios.post(
       `${API_BASE}/devapi/messages/whatsapp`,
       {
-        channelId,
+        channelId: config.channelId,
         channelType: 'whatsapp',
         recipient: { name: recipientName || digits, phone: digits },
         whatsapp: { type: 'text', text: { body: String(text) } },
       },
       {
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...authHeaders(config), 'Content-Type': 'application/json' },
         timeout: SEND_TIMEOUT_MS,
       }
     );
@@ -95,14 +97,14 @@ function isGallaboxHost(url) {
  * Download inbound media into the { data: base64, mimetype, filename } shape the
  * chat service already consumes for voice notes and PDFs.
  */
-async function downloadMedia(url, { mimeType = null, filename = null } = {}) {
+async function downloadMedia(config, url, { mimeType = null, filename = null } = {}) {
   if (!url) return null;
   try {
     const response = await axios.get(url, {
       responseType: 'arraybuffer',
       timeout: MEDIA_TIMEOUT_MS,
       maxContentLength: MAX_MEDIA_BYTES,
-      headers: isGallaboxHost(url) ? authHeaders() : undefined,
+      headers: isGallaboxHost(url) ? authHeaders(config) : undefined,
     });
     const buffer = Buffer.from(response.data);
     const headerType = String(response.headers?.['content-type'] || '').split(';')[0].trim();
@@ -121,8 +123,7 @@ async function downloadMedia(url, { mimeType = null, filename = null } = {}) {
  * request body using the secret set on the webhook in Settings → Webhooks.
  * Docs say base64; hex (optionally "sha256="-prefixed) is accepted too.
  */
-function verifySignature(rawBody, signature) {
-  const { webhookSecret } = getConfig();
+function verifySignature(webhookSecret, rawBody, signature) {
   if (!webhookSecret || !rawBody || !signature) return false;
 
   const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest();
@@ -136,16 +137,52 @@ function verifySignature(rawBody, signature) {
   );
 }
 
+/**
+ * Checks credentials without sending a WhatsApp message. Gallabox has no documented
+ * "whoami" call, so this reads the account's users list (needs the account id).
+ * `verified: null` means the check could not be made — not that it failed.
+ */
+async function testConnection(config) {
+  const missing = missingConfigKeys(config, { env: false });
+  if (missing.length) {
+    return { ok: false, verified: false, message: `Missing ${missing.join(', ')}` };
+  }
+  if (!config.accountId) {
+    return {
+      ok: true,
+      verified: null,
+      message: 'Saved, but not verified — add the Gallabox Account ID to check the API key and secret.',
+    };
+  }
+  try {
+    await axios.get(`${API_BASE}/devapi/accounts/${encodeURIComponent(config.accountId)}/users`, {
+      headers: authHeaders(config),
+      timeout: TEST_TIMEOUT_MS,
+    });
+    return { ok: true, verified: true, message: 'Gallabox accepted the API key and secret.' };
+  } catch (error) {
+    const status = error?.response?.status;
+    if (status === 401 || status === 403) {
+      return { ok: false, verified: false, message: 'Gallabox rejected the API key / secret (or it lacks permission for this account).' };
+    }
+    return { ok: true, verified: null, message: `Could not verify with Gallabox: ${describeApiError(error)}` };
+  }
+}
+
+/** A client bound to one bot's credentials. */
+function createClient(config) {
+  return {
+    config,
+    sendText: (phone, text, options) => sendText(config, phone, text, options),
+    downloadMedia: (url, options) => downloadMedia(config, url, options),
+  };
+}
+
 function logConfigStatus() {
   const missing = missingConfigKeys();
+  if (missing.length === 4) return;
   if (missing.length) {
-    logger.warn(`Gallabox not configured — missing ${missing.join(', ')}. Inbound WhatsApp is disabled.`);
-    return;
-  }
-  if (!getConfig().webhookSecret) {
-    logger.warn(
-      'GALLABOX_WEBHOOK_SECRET is not set — webhook signatures are NOT verified. Set a secret on the Gallabox webhook and here before going live.'
-    );
+    logger.warn(`GALLABOX_* env partly set — missing ${missing.join(', ')}. Configure numbers in the dashboard instead.`);
   }
 }
 
@@ -156,5 +193,7 @@ module.exports = {
   sendText,
   downloadMedia,
   verifySignature,
+  testConnection,
+  createClient,
   logConfigStatus,
 };

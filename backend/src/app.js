@@ -12,6 +12,7 @@ const { createDashboardRouter } = require('./api/dashboardRoutes');
 const { createTestApiRouter } = require('./api/testApiRoutes');
 const { createGallaboxWebhookRouter } = require('./api/gallaboxWebhookRoutes');
 const { dashboardUserService } = require('./services/dashboardUserService');
+const { platformBootstrapService } = require('./services/platformBootstrapService');
 const botConfigService = require('./services/botConfigService');
 const { botAccountService } = require('./services/botAccountService');
 const { actionItemService, ACTION_SOURCES } = require('./services/actionItemService');
@@ -107,7 +108,7 @@ function startReminderScheduler() {
           .listReadyBots()
           .find((b) => b.whatsapp_phone === reminder.phone);
 
-        const bot = account ? botManager.getBot(account.id) : botManager.getAnyReadyBot();
+        const bot = account ? botManager.getBot(account.id) : null;
         if (!bot || !bot.getStatus().ready) continue;
 
         const phone = `${reminder.phone}@c.us`;
@@ -207,8 +208,8 @@ async function start() {
       logger.warn(`SQLite backup scheduler failed to start: ${error.message}`);
     }
     dashboardUserService.seedAdminIfNeeded();
+    await platformBootstrapService.ensureDefaults();
     botConfigService.loadAllBotConfigs();
-    await knowledgeBaseService.initialize();
 
     const app = createExpressApp();
 
@@ -219,10 +220,12 @@ async function start() {
     });
 
     startReminderScheduler();
+    // Its first tick builds/loads every active bot's KB index in the background;
+    // a message arriving meanwhile waits for its bot's index (see initializeBot).
     startKbRefreshScheduler();
 
-    await botManager.startConfiguredBot().catch((error) => {
-      logger.error(`Gallabox bot failed to start: ${error.message}`);
+    await botManager.startAll().catch((error) => {
+      logger.error(`Gallabox bots failed to start: ${error.message}`);
     });
 
     logger.info('WhatsApp AI Assistant started successfully');

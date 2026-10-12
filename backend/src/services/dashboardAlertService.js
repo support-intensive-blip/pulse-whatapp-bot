@@ -9,10 +9,19 @@ class DashboardAlertService {
     this.nextId = 1;
   }
 
-  resolveRecipientUserIds(_teamId, botDashboardUserId = null) {
-    const ids = new Set();
-    if (botDashboardUserId) ids.add(Number(botDashboardUserId));
-    return [...ids].filter(Boolean);
+  /** Team admins of the bot's team; the platform owner when the team has none. */
+  resolveRecipientUserIds(bot) {
+    const { getDatabase } = require('../database/db');
+    const db = getDatabase();
+    const admins = bot?.team_id
+      ? db
+          .prepare("SELECT id FROM dashboard_users WHERE team_id = ? AND role = 'team_admin' AND is_active = 1")
+          .all(bot.team_id)
+      : [];
+    const rows = admins.length
+      ? admins
+      : db.prepare("SELECT id FROM dashboard_users WHERE role = 'owner' AND is_active = 1").all();
+    return rows.map((row) => row.id);
   }
 
   notifyNoApiKeyInbound({
@@ -24,8 +33,8 @@ class DashboardAlertService {
     const bot = botAccountService.findById(botAccountId);
     if (!bot) return [];
 
-    const teamId = null;
-    const recipientIds = this.resolveRecipientUserIds(teamId, bot.dashboard_user_id);
+    const teamId = bot.team_id || null;
+    const recipientIds = this.resolveRecipientUserIds(bot);
     if (!recipientIds.length) return [];
 
     const now = Date.now();
@@ -83,8 +92,8 @@ class DashboardAlertService {
     const bot = botAccountService.findById(botAccountId);
     if (!bot) return [];
 
-    const teamId = null;
-    const recipientIds = this.resolveRecipientUserIds(teamId, bot.dashboard_user_id);
+    const teamId = bot.team_id || null;
+    const recipientIds = this.resolveRecipientUserIds(bot);
     if (!recipientIds.length) return [];
 
     const now = Date.now();
@@ -146,8 +155,8 @@ class DashboardAlertService {
     const bot = botAccountService.findById(botAccountId);
     if (!bot) return [];
 
-    const teamId = null;
-    const recipientIds = new Set(this.resolveRecipientUserIds(teamId, bot.dashboard_user_id));
+    const teamId = bot.team_id || null;
+    const recipientIds = new Set(this.resolveRecipientUserIds(bot));
     if (assignedDashboardUserId) recipientIds.add(Number(assignedDashboardUserId));
 
     const created = [];

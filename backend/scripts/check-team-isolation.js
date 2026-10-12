@@ -1,6 +1,5 @@
 require('dotenv').config();
 const { initializeDatabaseAsync, getDatabase } = require('../src/database/db');
-const { fastOwnerPhone } = require('../src/api/dashboardHelpers');
 const { botAccountService } = require('../src/services/botAccountService');
 const conversationService = require('../src/services/conversationService');
 
@@ -10,17 +9,17 @@ const conversationService = require('../src/services/conversationService');
 
   const bots = db
     .prepare(
-      'SELECT id, dashboard_user_id, whatsapp_phone, last_whatsapp_phone FROM bot_accounts ORDER BY id'
+      'SELECT id, team_id, whatsapp_phone, last_whatsapp_phone FROM bot_accounts ORDER BY id'
     )
     .all();
 
   console.log('=== Bot accounts ===');
   for (const bot of bots) {
-    const ownerPhone = fastOwnerPhone(bot);
+    const ownerPhone = botAccountService.getPhone(bot);
     const chats = ownerPhone ? conversationService.listForOwner(ownerPhone, { limit: 5 }) : [];
     console.log({
       botId: bot.id,
-      dashboardUserId: bot.dashboard_user_id,
+      teamId: bot.team_id,
       whatsapp_phone: bot.whatsapp_phone,
       last_whatsapp_phone: bot.last_whatsapp_phone,
       resolvedOwner: ownerPhone,

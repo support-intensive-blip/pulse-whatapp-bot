@@ -14,12 +14,15 @@ All code references are relative to `backend/src/`.
 ## 1. Life of one inbound WhatsApp message
 
 ```
-Student messages the WhatsApp Business number
-  → Gallabox → POST /webhooks/gallabox (api/gallaboxWebhookRoutes.js)
-      - x-gallabox-signature HMAC checked against GALLABOX_WEBHOOK_SECRET → 401 if wrong
+Student messages one of the team's WhatsApp Business numbers
+  → Gallabox → POST /webhooks/gallabox/:botId (api/gallaboxWebhookRoutes.js)
+      (legacy POST /webhooks/gallabox is routed by the payload's channelId)
+      - x-gallabox-signature HMAC checked against that number's webhook secret → 401 if wrong
       - acknowledged with 200 immediately; processing continues in the background
-  → bot/gallaboxBot.js: handleWebhookEvent()
-      - only `Message.Received` is processed (`Message.WA.Status.Failed` is logged)
+  → that number's bot/gallaboxBot.js: handleWebhookEvent(), run inside its bot context
+    (utils/botContext.js — prompt, assistant name and KB index all come from this bot)
+      - `Message.Received` is processed; `Conversation.Create/Update` only when they carry a
+        fresh inbound message (<10 min old); `Message.WA.Status.Failed` is logged
       - messages for another Gallabox channel are ignored
       - duplicate deliveries of the same WhatsApp message id are dropped
       - payload normalized (bot/gallabox/inboundMessage.js): text, button/list replies,
@@ -173,15 +176,21 @@ citing facts, more natural for small talk.
 
 ## 8. Assistant on/off control
 
-- **Per chat / all contacts**: the AI toggles in the dashboard (Conversations list and
-  Bot Settings). A per-contact override always wins over the global contacts toggle.
+- **Per number** (AI Bots → bot → Overview): **Active** (normal rules below), **Testing**
+  (only test numbers get replies), **Paused** (every message stored, nothing sent — not even
+  escalation auto-replies; Call-to-Actions are still raised). A deactivated number is
+  stopped entirely and its webhooks are ignored; so are all numbers of a deactivated team.
+- **New chats**: the bot's "AI on for new chats" setting (`default_ai_on`) decides whether a
+  brand-new chat starts with AI on, or waits for a human.
+- **Per chat**: the Inbox banner ("AI Active" ↔ "AI Paused — Human Handling", Take over /
+  Resume AI). A per-contact override always wins over the bulk "all contacts" switch.
 - The old WhatsApp-side controls (`/assistant ...` from self-chat, `/pause` / `/start`
   typed by the owner inside a contact chat) no longer exist — on the Business API the
   owner never sends from the bot's own WhatsApp. A coach who wants to step in turns the AI
   off for that chat in the dashboard, or replies from Gallabox's inbox.
 - When assistant is disabled for a chat, inbound messages are still stored (so history
   isn't lost) but no AI reply is generated or sent.
-- **Testing mode** (dashboard → Settings → Testing mode; `bot_accounts.test_mode_enabled` +
+- **Testing mode** (AI status "Testing"; `bot_accounts.ai_status='testing'` / `test_mode_enabled` +
   `test_numbers`): while on, the bot replies **only** to the listed numbers and ignores the
   per-chat / global AI switches. Everyone else's messages are stored with no reply (logged
   as `Testing mode: <phone> is not a test number`). Turning it off restores the normal
@@ -189,8 +198,8 @@ citing facts, more natural for small talk.
 
 ## 9. Escalation ("Call to Action") queue and the scope firewall
 
-Two safety/routing layers exist in the code but are **both off by default** in this
-single-tenant configuration (`config/intensiveConfig.js`):
+Two safety/routing layers exist in the code but are **both off by default** — their config is
+still global, not per bot (`config/intensiveConfig.js`):
 
 - **Scope firewall** (`FIREWALL.enabled = false`) — when enabled, a classifier pass
   checks whether an inbound message is in-scope before the main reply is generated, and
@@ -228,16 +237,18 @@ the message is still stored and answered from its caption alone.
 
 ## 11. WhatsApp connection (Gallabox)
 
-- **No session to keep alive.** The number is connected inside Gallabox; this server only
-  needs `GALLABOX_API_KEY`, `GALLABOX_API_SECRET`, `GALLABOX_CHANNEL_ID` and
-  `GALLABOX_PHONE`. The bot is marked ready at startup if they're all set; missing keys are
-  logged and shown on the dashboard's Connect page.
-- **Which dashboard account owns the number**: `GALLABOX_BOT_ACCOUNT_ID` if set, else the
-  account that previously held this phone (so old chat history stays attached), else the
-  first dashboard user's account (`bot/botManager.js: resolveGallaboxAccountId()`).
-- **Webhook security**: with `GALLABOX_WEBHOOK_SECRET` set, every webhook must carry a
-  valid `x-gallabox-signature` (base64 HMAC-SHA256 of the raw body). In production the
-  webhook is refused entirely until a secret is configured.
+- **No session to keep alive.** Each number is connected inside Gallabox; Pulse stores that
+  number's API key, secret, channel id, account id and webhook secret on its `bot_accounts`
+  row (secrets AES-GCM encrypted with `ENCRYPTION_KEY`, falling back to `JWT_SECRET`).
+  `bot/botManager.js: startAll()` runs every active, fully configured number of every active
+  team; missing settings show on the bot's Integration tab.
+- **Env vars seed the first number only**: on first boot `services/platformBootstrapService.js`
+  copies `GALLABOX_*` onto the bot that owned that phone (or `GALLABOX_BOT_ACCOUNT_ID`), so old
+  chat history stays attached. After that, edit credentials in the dashboard — env changes are
+  only re-applied if the saved secrets become unreadable.
+- **Webhook security**: with a webhook secret saved for the number, every webhook must carry a
+  valid `x-gallabox-signature` (base64 HMAC-SHA256 of the raw body) made with *that* secret. In
+  production a number's webhooks are refused entirely until it has a secret.
 - **Retries / duplicates**: the last 5,000 WhatsApp message ids are remembered in memory, so
   a redelivered webhook is not answered twice (a restart clears this memory).
 - **Error-reply cooldown**: if message handling throws, the generic "Oops, something
@@ -249,7 +260,7 @@ the message is still stored and answered from its caption alone.
 | Job | Interval | Purpose |
 |---|---|---|
 | Reminder check | every minute (cron `* * * * *`) | Sends any due reminders (subject to the 24h window, see §3) |
-| KB auto-refresh | 30 minutes (`KB_REINGEST_INTERVAL_MS`) | Cheaply checks the KB source file's hash; only rebuilds the (expensive) TF-IDF index if it actually changed |
+| KB auto-refresh | 30 minutes (`KB_REINGEST_INTERVAL_MS`) | Re-reads file-backed knowledge documents, then brings every active bot's index up to date — only rebuilds the (expensive) TF-IDF index of a bot whose linked documents actually changed. The first tick runs at startup. |
 | SQLite backup | every 24h (`SQLITE_BACKUP_INTERVAL_HOURS`) | Snapshots `data/assistant.db` to `data/sqlite-backups/` |
 
 ---

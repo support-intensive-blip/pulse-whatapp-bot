@@ -4,10 +4,8 @@ import { RefreshCw, Search, MessageSquarePlus } from 'lucide-react';
 import { dataApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import ChatPanel from '../components/ChatPanel';
-import ContactsPanel from '../components/ContactsPanel';
 import ExportMenu from '../components/ExportMenu';
-import { ChatItem, Badge, Spinner } from '../components/ds';
-import { Segmented } from '../components/ui';
+import { ChatItem, Badge, NumberBadge, Spinner } from '../components/ds';
 import { formatISTDate } from '../utils/time';
 import { isContactChat, isContactAiOn } from '../utils/chat';
 
@@ -15,16 +13,27 @@ const LONG_PRESS_MS = 500;
 
 const FILTER_OPTIONS = [
   { value: 'all', label: 'All' },
+  { value: 'awaiting', label: 'Awaiting reply' },
+  { value: 'mine', label: 'Assigned to me' },
   { value: 'enabled', label: 'AI on' },
   { value: 'disabled', label: 'AI off' },
 ];
+
+// UI filter → /conversations query (assistant on/off, awaiting reply, assignee).
+function filterParams(filter) {
+  if (filter === 'enabled' || filter === 'disabled') return { assistant: filter, extra: {} };
+  if (filter === 'awaiting') return { assistant: 'all', extra: { awaiting: 1 } };
+  if (filter === 'mine') return { assistant: 'all', extra: { assigned: 'me' } };
+  return { assistant: 'all', extra: {} };
+}
 
 export default function Conversations() {
   const { id: selectedId } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { bot, loading: authLoading } = useAuth();
-  const [sidebarView, setSidebarView] = useState('chats');
+  const { loading: authLoading, bots, currentBot, currentBotId, isAdmin, scopeVersion } = useAuth();
+  const sidebarView = 'chats';
+  const showNumber = !currentBotId && bots.length > 1;
   const [chats, setChats] = useState([]);
   const [hint, setHint] = useState('');
   const [connected, setConnected] = useState(false);
@@ -44,7 +53,8 @@ export default function Conversations() {
   const load = useCallback(async (query = search, filter = assistantFilter) => {
     if (authLoading) return;
     try {
-      const data = await dataApi.conversations(query, filter);
+      const { assistant, extra } = filterParams(filter);
+      const data = await dataApi.conversations(query, assistant, extra);
       setChats(data.chats || []);
       setConnected(data.connected);
       setReconnecting(Boolean(data.reconnecting));
@@ -57,8 +67,9 @@ export default function Conversations() {
 
   useEffect(() => {
     if (authLoading) return;
+    setLoading(true);
     load();
-  }, [authLoading, load]);
+  }, [authLoading, load, scopeVersion]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -88,16 +99,11 @@ export default function Conversations() {
     setHint('');
     try {
       const data = await dataApi.syncConversations(search);
-      const filtered = await dataApi.conversations(search, assistantFilter);
+      const { assistant, extra } = filterParams(assistantFilter);
+      const filtered = await dataApi.conversations(search, assistant, extra);
       setChats(filtered.chats || data.chats || []);
       setConnected(Boolean(filtered.connected ?? data.connected ?? false));
       setReconnecting(Boolean(filtered.reconnecting ?? data.reconnecting));
-      const total = (filtered.chats || data.chats || []).length;
-
-      if (sidebarView === 'contacts' && total > 0) {
-        setSidebarView('chats');
-      }
-
       if (data.message) {
         setHint(data.message);
       }
@@ -110,17 +116,11 @@ export default function Conversations() {
   }
 
   function selectChat(chatId) {
-    setSidebarView('chats');
     navigate(`/conversations/${chatId}`);
   }
 
   function handleBack() {
     navigate('/conversations');
-  }
-
-  function handleContactsDone() {
-    load(search, assistantFilter);
-    setSidebarView('chats');
   }
 
   async function handleBulkAssistantAll() {
@@ -242,7 +242,7 @@ export default function Conversations() {
 
   return (
     <div
-      className={`-mx-4 -my-4 flex min-h-[calc(100dvh-5rem)] sm:-mx-6 lg:-mx-8 lg:-my-8 wa-app${selectedId ? ' wa-app-chat-open' : ''}`}
+      className={`flex wa-app${selectedId ? ' wa-app-chat-open' : ''}`}
     >
       <aside
         className={`wa-sidebar-chats flex w-[380px] min-w-[300px] max-w-[40%] flex-col border-r border-border bg-surface${
@@ -251,8 +251,10 @@ export default function Conversations() {
       >
         <header className="flex items-center justify-between border-b border-border px-4 py-3.5">
           <div>
-            <h1 className="text-base font-semibold text-ink">Chats</h1>
-            <p className="text-xs text-ink-muted">{chats.length} conversations</p>
+            <h1 className="text-base font-semibold text-ink">Inbox</h1>
+            <p className="text-xs text-ink-muted">
+              {currentBot ? currentBot.name : bots.length > 1 ? `All ${bots.length} numbers` : 'All numbers'} · {chats.length} conversations
+            </p>
           </div>
           <div className="flex items-center gap-1">
             {sidebarView === 'chats' && chats.length > 0 && (
@@ -276,20 +278,8 @@ export default function Conversations() {
           </div>
         </header>
         <p className="border-b border-border px-4 py-2 text-[11px] leading-relaxed text-ink-muted">
-          Chats appear here as people message your WhatsApp number. Export downloads Pulse history; replies you send
-          here go out on WhatsApp (only within 24h of the contact's last message).
+          Replies you send go out from the chat's own number, and only within 24h of the contact's last message.
         </p>
-
-        <div className="border-b border-border px-3 py-2.5">
-          <Segmented
-            value={sidebarView}
-            onChange={setSidebarView}
-            options={[
-              { value: 'chats', label: 'Conversations' },
-              { value: 'contacts', label: 'Contacts' },
-            ]}
-          />
-        </div>
 
         {sidebarView === 'chats' && (
           <>
@@ -314,7 +304,7 @@ export default function Conversations() {
               </div>
             </div>
 
-            {(assistantFilter === 'enabled' || assistantFilter === 'disabled') && (
+            {isAdmin && (assistantFilter === 'enabled' || assistantFilter === 'disabled') && (
               <div className="border-b border-border px-3 py-2">
                 <button
                   type="button"
@@ -325,8 +315,8 @@ export default function Conversations() {
                   {bulkBusy
                     ? 'Updating…'
                     : assistantFilter === 'enabled'
-                      ? 'Disable AI for all contacts'
-                      : 'Enable AI for all contacts'}
+                      ? `Disable AI for all contacts${currentBot ? ` on ${currentBot.name}` : ''}`
+                      : `Enable AI for all contacts${currentBot ? ` on ${currentBot.name}` : ''}`}
                 </button>
               </div>
             )}
@@ -420,16 +410,14 @@ export default function Conversations() {
 
         {!connected && sidebarView === 'chats' && (
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
-            WhatsApp (Gallabox) offline —{' '}
-            <Link to="/connect" className="font-medium text-primary hover:underline">
-              Connection
+            {bots.length ? 'No connected number in this view' : 'No WhatsApp number connected yet'} —{' '}
+            <Link to={isAdmin ? '/integrations' : '/'} className="font-medium text-primary hover:underline">
+              {isAdmin ? 'Integrations' : 'Overview'}
             </Link>
           </div>
         )}
 
-        {sidebarView === 'contacts' ? (
-          <ContactsPanel onDone={handleContactsDone} onHint={setHint} />
-        ) : (
+        {(
           <div className="flex-1 overflow-y-auto">
             {loading && chats.length === 0 ? (
               <div className="flex justify-center py-16">
@@ -442,7 +430,9 @@ export default function Conversations() {
                 </div>
                 <p className="text-sm font-semibold text-ink">No conversations yet</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  Chats appear as soon as someone messages your WhatsApp number.
+                  {assistantFilter === 'all'
+                    ? 'Chats appear as soon as someone messages your WhatsApp numbers.'
+                    : 'Nothing matches this filter.'}
                 </p>
                 <button
                   type="button"
@@ -455,7 +445,7 @@ export default function Conversations() {
                 <button
                   type="button"
                   className="mt-2 text-sm font-medium text-ink-muted hover:text-ink"
-                  onClick={() => setSidebarView('contacts')}
+                  onClick={() => navigate('/contacts')}
                 >
                   Import contacts
                 </button>
@@ -474,6 +464,8 @@ export default function Conversations() {
                     active={isActive}
                     selected={isChecked}
                     aiOn={isContactAiOn(chat)}
+                    badge={showNumber ? <NumberBadge name={chat.botName} phone={chat.botPhone} className="max-w-[45%] shrink-0" /> : null}
+                    unreadHint={chat.lastMessage?.role === 'user'}
                     showCheckbox={aiSelectMode && isContact}
                     checked={isChecked}
                     onCheckboxChange={(checked) => toggleChatSelected(chat.id, checked)}
@@ -530,11 +522,11 @@ export default function Conversations() {
                   <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
                 </svg>
               </div>
-              <h2>Pulse for WhatsApp</h2>
-              <p>Select a chat to view messages — same layout as WhatsApp Web.</p>
-              <p className="wa-empty-hint">Long-press a contact to enable or disable AI.</p>
-              <button type="button" className="wa-empty-cta" onClick={() => setSidebarView('contacts')}>
-                Manage contacts &amp; bulk AI
+              <h2>Unified inbox</h2>
+              <p>Select a chat to read it, reply, or hand it over between AI and your team.</p>
+              <p className="wa-empty-hint">Long-press (or right-click) chats to switch AI for several at once.</p>
+              <button type="button" className="wa-empty-cta" onClick={() => navigate('/contacts')}>
+                Contacts &amp; CSV import
               </button>
             </div>
           </div>

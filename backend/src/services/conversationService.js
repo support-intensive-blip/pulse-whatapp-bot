@@ -4,6 +4,15 @@ const memoryService = require('./memoryService');
 const userService = require('./userService');
 const { normalizePhone, pickContactDisplayName, phoneTailDigits, isSkippableWhatsAppChatId, resolveOwnerScopeIds, isPhoneLikeString } = require('../utils/helpers');
 
+function parseTags(raw) {
+  try {
+    const list = JSON.parse(raw || '[]');
+    return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
 function profileContactKey(profile) {
   if (profile.chat_type === 'self') return '__self__';
 
@@ -103,6 +112,11 @@ class ConversationService {
       aiOn: profile.chat_type === 'contact' && assistantActive,
       conversationMode: profile.conversation_mode || 'casual',
       contextTopic: profile.context_topic || '',
+      ownerPhone: profile.owner_phone,
+      tags: parseTags(profile.tags),
+      assignedUserId: profile.assigned_user_id || null,
+      contactNotes: profile.contact_notes || '',
+      importSource: profile.import_source || null,
       messageCount,
       lastMessage: last
         ? {
@@ -242,7 +256,10 @@ class ConversationService {
       });
   }
 
-  listForOwner(ownerPhone, { search = '', assistant = 'all', limit = 200, consolidate = false } = {}) {
+  listForOwner(
+    ownerPhone,
+    { search = '', assistant = 'all', limit = 200, consolidate = false, tag = '', assignedUserId = null } = {}
+  ) {
     const owner = normalizePhone(ownerPhone);
     if (!owner) return [];
 
@@ -251,8 +268,19 @@ class ConversationService {
       chatProfileService.consolidateImportedDuplicates(ownerPhone);
     }
 
-    let profiles = chatProfileService.getByOwner(owner);
+    // Eval-harness / playground sessions are not real WhatsApp contacts.
+    let profiles = chatProfileService.getByOwner(owner).filter((p) => !chatProfileService.isApiTestProfile(p));
     profiles = this.fastDedupeProfiles(profiles);
+
+    if (tag) {
+      const wanted = String(tag).trim().toLowerCase();
+      profiles = profiles.filter((p) => parseTags(p.tags).some((t) => t.toLowerCase() === wanted));
+    }
+    if (assignedUserId === 'none') {
+      profiles = profiles.filter((p) => !p.assigned_user_id);
+    } else if (assignedUserId) {
+      profiles = profiles.filter((p) => Number(p.assigned_user_id) === Number(assignedUserId));
+    }
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -281,6 +309,27 @@ class ConversationService {
     });
 
     return this.enrichChats(profiles.slice(0, limit));
+  }
+
+  /**
+   * Unified inbox across several numbers. Each chat carries the bot (number) that
+   * received it; chats of different numbers are never merged.
+   * `awaiting` keeps chats whose last message is from the contact (no reply yet).
+   */
+  listForBots(bots, { awaiting = false, limit = 200, ...options } = {}) {
+    const { botAccountService } = require('./botAccountService');
+    const chats = [];
+    for (const bot of bots) {
+      const phone = botAccountService.getPhone(bot);
+      if (!phone) continue;
+      for (const chat of this.listForOwner(phone, { ...options, limit })) {
+        chats.push({ ...chat, botId: bot.id, botName: bot.name, botPhone: phone });
+      }
+    }
+    return chats
+      .filter((chat) => !awaiting || chat.lastMessage?.role === 'user')
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+      .slice(0, limit);
   }
 
   exportChats(ownerPhone, chatProfileIds = null, options = {}) {
@@ -483,3 +532,4 @@ class ConversationService {
 }
 
 module.exports = new ConversationService();
+module.exports.parseTags = parseTags;

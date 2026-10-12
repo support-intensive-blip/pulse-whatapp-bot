@@ -44,11 +44,8 @@ class ActionNotificationService {
     const coachPhone = coach?.coach_phone;
     const userAlertPhones = this.parseConfiguredNumbers(coach?.action_alert_phones);
 
-    const admin = dashboardUserService.listAll()[0];
-    if (!admin) return false;
-
-    const adminBotAccount = botAccountService.findByDashboardUserId(admin.id);
-    const adminBot = adminBotAccount ? botManager.getBot(adminBotAccount.id) : null;
+    // Sent from the number the item belongs to (24h-window rules still apply).
+    const adminBot = botManager.getBot(actionItem.bot_account_id);
     if (!adminBot?.isReady) return false;
 
     const recipients = [...new Set([coachPhone, ...userAlertPhones].filter(Boolean))];
@@ -66,14 +63,17 @@ class ActionNotificationService {
     }
   }
 
+  // The assignee plus the item's team admins — never users of other teams.
   resolvePushRecipientUserIds(actionItem) {
     const ids = new Set();
     if (actionItem?.assigned_dashboard_user_id) {
       ids.add(Number(actionItem.assigned_dashboard_user_id));
     }
 
-    for (const user of dashboardUserService.listAll()) {
-      ids.add(user.id);
+    const bot = botAccountService.findById(actionItem?.bot_account_id);
+    const { dashboardAlertService } = require('./dashboardAlertService');
+    for (const id of dashboardAlertService.resolveRecipientUserIds(bot)) {
+      ids.add(id);
     }
 
     return [...ids];

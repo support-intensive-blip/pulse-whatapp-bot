@@ -7,6 +7,7 @@
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
     "ingest-kb": "node src/scripts/ingest-knowledge-base.js",
+    "check:isolation": "node scripts/check-multi-bot-isolation.js",
     "pinecone:setup": "node src/scripts/setup-pinecone.js",
     "vertex:setup": "node src/scripts/setup-vertex-vector-search.js"
   },

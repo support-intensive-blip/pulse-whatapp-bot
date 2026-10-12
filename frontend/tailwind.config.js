@@ -12,6 +12,12 @@ export default {
           hover: '#1D4ED8',
           soft: '#EFF6FF',
         },
+        // Teal = AI is handling the chat; kept distinct from success green.
+        ai: {
+          DEFAULT: '#0D9488',
+          soft: '#F0FDFA',
+          ring: '#99F6E4',
+        },
         success: '#22C55E',
         warning: '#F59E0B',
         danger: '#EF4444',

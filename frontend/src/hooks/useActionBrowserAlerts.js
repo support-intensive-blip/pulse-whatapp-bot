@@ -76,7 +76,7 @@ export function useActionBrowserAlerts() {
 
   const [active, setActive] = useState(readAlertsActive);
 
-  const { items } = useActionItemsFeed({ status: 'pending' });
+  const { items } = useActionItemsFeed({ status: 'active' });
 
   const seededRef = useRef(false);
 
@@ -136,7 +136,7 @@ export function useActionBrowserAlerts() {
 
 
 
-    const pendingItems = items.filter((item) => item.status === 'pending');
+    const pendingItems = items.filter((item) => item.status === 'open' || item.status === 'in_progress');
 
 
 

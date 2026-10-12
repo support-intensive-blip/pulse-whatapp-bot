@@ -1,9 +1,10 @@
 # WhatsApp AI Assistant
 
-A production, single-tenant WhatsApp AI assistant built on the **WhatsApp Business API via
-Gallabox** + **OpenAI**, with
-a hybrid (dense + BM25) RAG knowledge base, a React operator dashboard, and BigQuery-backed
-durable storage. One dashboard login, one WhatsApp number, one hardcoded persona.
+**Pulse** — a multi-team WhatsApp AI platform built on the **WhatsApp Business API via
+Gallabox** + **OpenAI**, with a hybrid (dense + BM25) RAG knowledge base, a React operator
+dashboard, and optional BigQuery-backed durable storage. One owner runs many teams; each team
+connects any number of Gallabox numbers, and every number is an independent AI bot with its own
+credentials, prompt, knowledge and behavior.
 
 The repo has two deployable halves:
 
@@ -14,13 +15,15 @@ The repo has two deployable halves:
 
 Code paths in this README (`src/...`, `knowledge-base/...`) are relative to `backend/`.
 
-The system prompt and knowledge base are fixed in code:
-- **System prompt:** `src/config/intensiveConfig.js` (loads `src/config/intensive-system-prompt.txt`)
-- **Knowledge base:** `knowledge-base/nxtwave-intensive-knowledge-base.pdf`
+Prompts and knowledge are edited per bot in the dashboard. The original single-number setup is
+imported automatically on first boot (`src/services/platformBootstrapService.js`):
+- `GALLABOX_*` env → the first bot's encrypted credentials (seed only — afterwards the dashboard owns them)
+- `src/config/intensive-system-prompt.txt` → that bot's prompt, version 1
+- `knowledge-base/nxtwave-intensive-brain-memory-kb.txt` → a team knowledge document linked to it
+  (it keeps following the file on redeploys until someone edits it in the dashboard)
 
-> Earlier versions were multi-tenant (owner → team admins → users, per-team configs in
-> `team_settings`). That machinery was removed; the `teams` / `team_settings` /
-> `api_key_access_requests` tables still exist but are unused.
+> `team_settings` / `api_key_access_requests` are leftovers from an older multi-tenant design and
+> are unused.
 
 > This file is the top-level map. For the two most-changed subsystems there are dedicated docs:
 > **[docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md)** (KB chunking/retrieval/gating rules) and
@@ -37,14 +40,22 @@ The system prompt and knowledge base are fixed in code:
 src/
 ├── app.js                     # Entry point: DB init, config load, Express + Gallabox bot, cron
 ├── api/
-│   ├── dashboardRoutes.js     # Main API — auth, conversations, bot status, action items
-│   ├── gallaboxWebhookRoutes.js  # POST /webhooks/gallabox — inbound WhatsApp messages
-│   ├── routes.js              # Legacy simple GETs (/health, /users, /stats, ...)
+│   ├── middleware/auth.js     # JWT auth, roles, team/number scope (req.scope)
+│   ├── dashboardRoutes.js     # Auth, unified inbox, conversations, stats; mounts the routers below
+│   ├── teamRoutes.js          # Owner: teams, platform overview, audit log
+│   ├── userRoutes.js          # Team admin: members, roles, password resets
+│   ├── botRoutes.js           # Team admin: numbers/bots, credentials, prompt versions, playground
+│   ├── knowledgeRoutes.js     # Team admin: knowledge documents
+│   ├── contactRoutes.js       # Contacts list, CSV import (preview → commit), export
+│   ├── actionItemRoutes.js    # Call-to-Actions
+│   ├── analyticsRoutes.js     # Metrics derived from messages / action items
+│   ├── gallaboxWebhookRoutes.js  # POST /webhooks/gallabox/:botId (+ legacy /webhooks/gallabox)
+│   ├── routes.js              # Public /health and /knowledge-base status (no contact data)
 │   └── testApiRoutes.js       # /api/test/chat — used by the Opik eval harness
 ├── bot/
 │   ├── gallabox/              # Gallabox REST client (send, media download, HMAC) + payload normalizer
-│   ├── gallaboxBot.js         # The connected WhatsApp Business number: webhook events in, replies out
-│   ├── botManager.js          # Picks which dashboard account owns the Gallabox number
+│   ├── gallaboxBot.js         # One connected number: webhook events in, replies out (own credentials)
+│   ├── botManager.js          # Runs one GallaboxBot per active, configured number
 │   └── messageHandler.js      # Inbound pipeline: store → escalation/firewall → batch → chatService
 ├── ai/
 │   ├── systemPrompts.js       # Persona/system prompt assembly
@@ -77,35 +88,51 @@ Two modes, selected by `BQ_ENABLED` / `SQLITE_ENABLED` (`src/database/storageMod
   every write (`bqSync.js`). Nothing persists to local disk in this mode — BigQuery is the
   durable store.
 
-Schema (`src/database/schema.js`): `users`, `chat_profiles` (per-conversation state, scoped to an
-`owner_phone`), `messages`, `notes`, `reminders`, `conversation_summaries`, `student_user_memory`,
-`token_usage` (per-message LLM cost tracking), `dashboard_users` (web logins), `bot_accounts` (one
-row per WhatsApp number, linked to a `dashboard_user_id`), `action_items`,
-`push_subscriptions`.
+Schema (`src/database/schema.js`, platform migrations in `src/database/platformMigrations.js`):
+`teams`, `dashboard_users` (web logins with `role` + `team_id`), `bot_accounts` (one row per
+WhatsApp number: team, encrypted Gallabox credentials, live prompt, linked knowledge, behavior),
+`bot_prompt_versions`, `knowledge_resources`, `audit_log`, `users`, `chat_profiles`
+(per-conversation state, scoped to the bot's number in `owner_phone`, plus tags / assignee / notes),
+`messages`, `conversation_summaries`, `student_user_memory` (keyed by bot number + student phone),
+`token_usage`, `action_items`, `push_subscriptions`, `notes`, `reminders`.
 
-## Single-tenant model
+## Multi-team model
 
 ```
-dashboard_user (the one web login, seeded from DASHBOARD_ADMIN_EMAIL/PASSWORD)
-   └── bot_account (the one WhatsApp number/session)
-          └── chat_profile (per contact chatting with that number)
+Owner (seeded from DASHBOARD_ADMIN_EMAIL/PASSWORD; no team, switches between teams)
+   └── team
+         ├── dashboard_users: team_admin(s), team_user(s)
+         ├── knowledge_resources (shared by the team's bots)
+         └── bot_account (one per Gallabox WhatsApp number — an independent AI bot)
+                ├── credentials, prompt (+ versions), linked knowledge, AI status, behavior
+                └── chat_profile (per contact chatting with that number)
 ```
 
-Persona, model tier and the KB path used to be per-team; they are now fixed
-(`src/config/intensiveConfig.js`). `chatProfileService.js` owns `chat_profiles`, including
-consolidating multiple WhatsApp chat IDs into one canonical profile per contact.
+- **Owner**: creates/deactivates teams, assigns admins, sees every team (audit-logged).
+- **Team admin**: numbers, credentials, prompts, knowledge, behavior, testing, users — plus everything a user does.
+- **Team user**: inbox, manual replies, AI on/off per chat, contacts + CSV import, Call-to-Actions.
+  Never sees secrets, prompts or other teams.
+
+Every API request is scoped by `api/middleware/auth.js`: the team (owner picks it with
+`x-team-id`), and optionally one number (`x-bot-id` / `?botId=`; absent = "All numbers").
+Chats of different numbers are never merged, even for the same student. Deactivating a team
+signs its users out and stops its numbers. Run `npm run check:isolation` (backend) for an
+end-to-end check of these rules against a throwaway database.
 
 ## Knowledge base / RAG
 
-One KB, one vector store — both hardcoded (`src/config/intensiveConfig.js`):
+Knowledge documents belong to a team (`knowledge_resources`, text stored in the DB); each bot links
+the documents it answers from. Every bot has its **own index**, built from its linked documents:
 
-- **Source:** `knowledge-base/nxtwave-intensive-brain-memory-kb.txt` (QA `QUESTION_ID:` blocks).
 - **Vector store:** `local` — an **in-server** hybrid index (TF-IDF dense + BM25 sparse, fused by
-  reciprocal-rank fusion), persisted to `data/kb_vectors.json` + `data/kb_bm25_global.json`.
+  reciprocal-rank fusion), persisted per bot to `data/kb_vectors_team_bot_<id>.json` (+ BM25).
   **No third-party vector service or hosted embedding API is called.**
+- A bot re-indexes when its linked documents change (fingerprint of ids + content hashes), on the
+  dashboard's "Re-index" button, and on the periodic refresh, which also re-reads file-backed
+  documents.
 
-Retrieval is gated to `INTENSIVE` conversation mode only. It re-indexes automatically on the next
-start whenever the KB file changes; or run `node src/scripts/force-reindex-kb.js` / `npm run ingest-kb`.
+Retrieval is gated to `INTENSIVE` conversation mode only. `npm run ingest-kb` /
+`force-reindex-kb.js` still rebuild the old global index used outside a bot context.
 
 `VECTOR_BACKEND=vertex|pinecone` opts back into a hosted store (requires the matching env vars and
 `vectorStoreService.js` / the Vertex + Pinecone modules, which are retained but dormant). KB
@@ -116,10 +143,13 @@ authoring format, chunking rules and the topic guard are in
 
 ```
 Contact messages the business number
-   → Gallabox → POST /webhooks/gallabox (HMAC-verified, acked immediately)
-   → gallaboxBot.js (dedupe by WhatsApp message id) → messageHandler.js
+   → Gallabox → POST /webhooks/gallabox/:botId (HMAC-verified with that bot's secret, acked immediately)
+   → that number's gallaboxBot.js (dedupe by WhatsApp message id), inside its bot context
+     (utils/botContext.js: prompt, assistant name and KB index come from this bot)
+   → messageHandler.js
         ├─ store message (text, or media description) in `messages`
-        ├─ escalation / scope firewall / assistant on-off checks
+        ├─ bot paused? → store only · testing? → test numbers only · per-chat AI on/off
+        ├─ escalation / scope firewall
         └─ inboundMessageBatcher.js (debounces rapid multi-fragment messages, ~10s window)
               → chatService.js
                    ├─ contextService.resolveMode() → CASUAL vs INTENSIVE
@@ -140,8 +170,14 @@ Netlify forwards `/api/*` to the Render backend server-side (`frontend/netlify.t
 local dev the Vite server does the same to `localhost:3000`. The browser therefore never makes a
 cross-origin request — no CORS setup needed.
 
-Pages: Login, Dashboard, Connect (Gallabox status + webhook URL), Conversations, ConversationDetail,
-BotSettings, ActionItems, Account.
+The top bar carries the team selector (owner) and the WhatsApp number selector ("All numbers" or
+one); every page follows it. Navigation adapts to the role.
+
+Pages: Overview, Inbox (three columns: chats with number badges, chat with AI Active / "AI Paused
+— Human Handling" banner, contact details + related Call-to-Actions), Contacts (CSV import wizard),
+Call to Actions (table + Kanban + detail drawer), Analytics, AI Bots, Connect-number wizard, Bot
+workspace (Overview · AI Prompt with versions · Knowledge · Behavior · Testing playground ·
+Integration · Activity), Knowledge Base, Team & Users, Integrations, Teams (owner), Settings.
 
 ## REST API
 
@@ -149,18 +185,23 @@ All under `/api` (`src/api/dashboardRoutes.js`) unless noted:
 
 | Group | Covers |
 |---|---|
-| `/auth/*` | Login, current user, password change |
-| `/admin/sqlite-*` | SQLite backup / guard / purge |
-| `/bot/*` | Gallabox connection status, reconnect/stop, bot settings |
+| `/auth/*` | Login, current user + team/numbers/permissions, password change |
+| `/owner/overview`, `/teams`, `/audit-log` | Owner only |
+| `/team/members`, `/users/*` | Roster (all roles) · member management (admins) |
+| `/bots/*` | Numbers, credentials (write-only), test connection, prompt + versions, knowledge links, playground, activity (admins) |
+| `/knowledge/*` | Team knowledge documents (admins) |
+| `/conversations/*` | Unified inbox, messages, send, AI toggle, contact details, import/export, summarize, escalate |
+| `/contacts/*` | Contact list, CSV template, import preview/commit, export |
+| `/action-items/*` | Call-to-Actions: list/filter, detail, create, update/assign/resolve |
+| `/analytics` | Volume, AI vs human, CTA trends, per-number comparison |
+| `/stats` | Aggregate counts for the selected scope |
 | `/notifications/*` | Web-push subscribe + notification inbox |
-| `/conversations/*` | List/sync/send, assistant toggle, CSV import/export, escalate |
-| `/action-items` | Action item tracking |
-| `/stats` | Aggregate counts |
+| `/admin/sqlite-*` | SQLite backup / guard / purge (owner) |
 
-`POST /webhooks/gallabox` (`gallaboxWebhookRoutes.js`) receives inbound WhatsApp messages.
-Legacy simple GETs at root (`src/api/routes.js`): `/health`, `/users`, `/notes`, `/reminders`,
-`/knowledge-base`, `/chats`, `/stats`. `/api/test/chat` (`testApiRoutes.js`) is a synchronous
-chat endpoint used only by the Opik eval harness.
+`POST /webhooks/gallabox/:botId` receives one number's webhooks; the legacy `POST /webhooks/gallabox`
+still works and routes by the payload's `channelId`. Public root GETs (`src/api/routes.js`):
+`/health` and `/knowledge-base` only. `/api/test/chat` (`testApiRoutes.js`) is a synchronous chat
+endpoint used only by the Opik eval harness (`TEST_API_BOT_ID` picks the number it talks to).
 
 ## Requirements
 
@@ -202,8 +243,9 @@ Runtime data (`data/`, `logs/`, `uploads/`, `secrets/`, `.env`) lives inside `ba
 | Pinecone (only if `VECTOR_BACKEND=pinecone`) | `PINECONE_API_KEY`, `PINECONE_INDEX`, `PINECONE_INTEGRATED` |
 | Vertex AI / GCP (only if `VECTOR_BACKEND=vertex`) | `GCP_PROJECT_ID`, `VERTEX_REGION`, `VERTEX_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_ID`, `VERTEX_DEPLOYED_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_DOMAIN`, `GOOGLE_APPLICATION_CREDENTIALS` |
 | KB source override | `KNOWLEDGE_BASE_PATH` (defaults to `knowledge-base/nxtwave-intensive-brain-memory-kb.txt`) |
-| WhatsApp (Gallabox) | `GALLABOX_API_KEY`, `GALLABOX_API_SECRET`, `GALLABOX_CHANNEL_ID`, `GALLABOX_PHONE`, `GALLABOX_WEBHOOK_SECRET`, `GALLABOX_BOT_ACCOUNT_ID` (optional) |
-| Dashboard | `DASHBOARD_CORS_ORIGIN`, `TRUST_PROXY` |
+| Secrets at rest | `ENCRYPTION_KEY` (falls back to `JWT_SECRET`) encrypts Gallabox keys — **changing it makes saved credentials unreadable** (the dashboard asks to re-enter them) |
+| WhatsApp (Gallabox) | Configured per number in the dashboard. `GALLABOX_API_KEY`, `GALLABOX_API_SECRET`, `GALLABOX_CHANNEL_ID`, `GALLABOX_PHONE`, `GALLABOX_WEBHOOK_SECRET`, `GALLABOX_ACCOUNT_ID`, `GALLABOX_BOT_ACCOUNT_ID` only seed the first number at bootstrap |
+| Dashboard | `DASHBOARD_CORS_ORIGIN`, `TRUST_PROXY`, `PUBLIC_BASE_URL` (webhook URLs shown in the UI) |
 
 ### Knowledge base setup
 
@@ -220,15 +262,20 @@ documented in [docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md).
 
 ### WhatsApp (Gallabox) setup
 
-1. Gallabox → Settings → Developer → API Keys: create a key; set `GALLABOX_API_KEY` / `GALLABOX_API_SECRET`.
-2. Gallabox → Settings → Connect → WhatsApp Channel: copy the channel id into `GALLABOX_CHANNEL_ID`,
-   and set `GALLABOX_PHONE` to that number with country code (e.g. `919876543210`).
-3. Gallabox → Settings → Webhooks → Add Webhook: URL `https://<backend>/webhooks/gallabox`, event
-   `Message.Received` (optionally `Message.WA.Status.Failed`), and a secret — set the same value as
-   `GALLABOX_WEBHOOK_SECRET` (required when `NODE_ENV=production`).
+Per number, as a team admin: **AI Bots → Connect WhatsApp number**.
+
+1. Gallabox → Settings → Developer → API Keys: create a key; paste key + secret in the wizard.
+2. Gallabox → Settings → Connect → WhatsApp Channel: copy the channel id (and the account id, which
+   lets "Test connection" verify the key).
+3. Choose a webhook secret in the wizard. Then Gallabox → Settings → Webhooks → Add Webhook: the URL
+   the wizard shows (`https://<backend>/webhooks/gallabox/<botId>`), event `Message.Received`
+   (optionally `Conversation.Create/Update`, `Message.WA.Status.Failed`), and the same secret
+   (required when `NODE_ENV=production`).
 4. Turn off any Gallabox bot / auto-reply on that number, or two bots will answer.
 
-The dashboard's Connect page shows the status and the exact webhook URL to paste.
+New numbers start paused or in testing mode; the bot workspace's Testing tab runs the real
+pipeline without sending anything. Existing deployments keep working unchanged: the env-configured
+number is imported on first boot and the legacy webhook URL still routes to it.
 
 Free-form replies only work within 24 hours of the contact's last message (a WhatsApp rule);
 outside that window WhatsApp requires an approved template. That affects `/remind` reminders and
@@ -248,7 +295,7 @@ context. Images, video and other files are stored and acknowledged, and also rai
 only redeploys on changes under `backend/`. `data/` (SQLite — every conversation — plus the KB
 index) lives on Render's persistent disk, so it survives redeploys. Set the secrets marked
 `sync: false` in the Render dashboard. Render's own URL (`RENDER_EXTERNAL_URL`) is used to show
-the Gallabox webhook URL on the Connect page; set `PUBLIC_BASE_URL` to override it (custom domain).
+the Gallabox webhook URLs in the dashboard; set `PUBLIC_BASE_URL` to override it (custom domain).
 
 ### Frontend → Netlify
 
@@ -258,8 +305,8 @@ build command (`npm ci && npm run build`), publish dir (`dist`), the SPA fallbac
 service URL differs. Netlify cuts proxied requests off after ~26s, so very long dashboard
 operations (big imports/exports) should be kept under that.
 
-Gallabox webhooks go straight to Render (`https://<render-service>/webhooks/gallabox`), not via
-Netlify.
+Gallabox webhooks go straight to Render (`https://<render-service>/webhooks/gallabox/<botId>`),
+not via Netlify.
 
 ### Local Docker
 
@@ -294,9 +341,10 @@ generation/judge noise.
 
 | Symptom | Fix |
 |---|---|
-| No replies, nothing in logs | Check the Gallabox webhook URL/event; Connect page → "Last message" should update |
-| `Rejected Gallabox webhook` in logs | `GALLABOX_WEBHOOK_SECRET` doesn't match the secret on the Gallabox webhook |
-| `Gallabox not configured` at startup | One of the `GALLABOX_*` env vars is missing (listed in the log line) |
+| No replies, nothing in logs | Check the Gallabox webhook URL/event; bot workspace → Integration → "Last webhook received" should update |
+| No replies, messages stored | The bot is Paused, or in Testing and the sender isn't a test number, or AI is off for that chat |
+| `Rejected Gallabox webhook` in logs | The secret on the Gallabox webhook doesn't match the one saved for that number |
+| "Saved secrets can't be decrypted" | `ENCRYPTION_KEY` / `JWT_SECRET` changed — re-enter the credentials on the Integration tab |
 | Reply fails with a Gallabox API error | Usually the 24h window has closed — the contact must message first, or use a template |
 | Voice messages fail | Confirm `ffmpeg -version` works; check `logs/error.log` |
 | KB / RAG issues | See the Troubleshooting table in [docs/VERTEX-PIPELINE.md](docs/VERTEX-PIPELINE.md) — every KB call now logs a correlation id, timing, and host IP |

@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
 const { dashboardUserService } = require('./dashboardUserService');
-const { botAccountService } = require('./botAccountService');
 
 function getJwtSecret() {
   return process.env.JWT_SECRET || 'change-me-in-production';
@@ -37,20 +36,18 @@ function login(email, password) {
     return { error: 'Invalid email or password' };
   }
 
-  let bot = botAccountService.findByDashboardUserId(user.id);
-  if (!bot) {
-    bot = botAccountService.createForUser(user.id, user.name);
-    if (user.role === 'admin' || user.role === 'owner') {
-      botAccountService.linkLegacySession(user.id);
-      bot = botAccountService.findByDashboardUserId(user.id);
+  if (user.role !== 'owner') {
+    const { teamService } = require('./teamService');
+    const team = teamService.findById(user.team_id);
+    if (!team || !team.is_active) {
+      return { error: 'Your team has been deactivated. Contact the Pulse owner.' };
     }
   }
-  const safeUser = dashboardUserService.findById(user.id);
 
+  const safeUser = dashboardUserService.findById(user.id);
   return {
     token: signToken(safeUser),
-    user: safeUser,
-    bot: botAccountService.toPublic(bot),
+    user: dashboardUserService.toPublic(safeUser),
   };
 }
 

@@ -30,11 +30,16 @@ function getClient() {
 const INTEGER_FIELD_HINTS = [
   'is_active', 'sent', 'assistant_active', 'assistant_pinned_on', 'assistant_self_enabled',
   'assistant_contacts_enabled', 'guru_mode', 'use_owner_api_key', 'reply_delay_seconds',
-  'prompt_tokens', 'completion_tokens', 'total_tokens',
+  'prompt_tokens', 'completion_tokens', 'total_tokens', 'default_ai_on', 'test_mode_enabled',
+  'batch_delay_seconds', 'context_window_minutes',
 ];
+
+// "_id" columns that hold external string ids, not row references.
+const STRING_ID_FIELDS = ['session_client_id', 'gallabox_channel_id', 'gallabox_account_id', 'target_id', 'chat_id'];
 
 function bqTypeForField(table, field, timestamps) {
   if (timestamps.includes(field)) return 'TIMESTAMP';
+  if (STRING_ID_FIELDS.includes(field)) return 'STRING';
   if (field === 'id' || field.endsWith('_id')) return 'INTEGER';
   if (field.includes('cost') || field.endsWith('_usd')) return 'FLOAT64';
   if (INTEGER_FIELD_HINTS.includes(field)) return 'INTEGER';
@@ -64,6 +69,17 @@ async function ensureDataset(bq) {
   return dataset;
 }
 
+// Inserts use ignoreUnknownValues, so a column missing in BigQuery would be dropped
+// silently — append any config field the warehouse table doesn't have yet.
+async function addMissingColumns(bqTable, table, schema) {
+  const [metadata] = await bqTable.getMetadata();
+  const existing = new Set((metadata.schema?.fields || []).map((f) => f.name));
+  const missing = schema.filter((f) => !existing.has(f.name)).map((f) => ({ ...f, mode: 'NULLABLE' }));
+  if (!missing.length) return;
+  await bqTable.setMetadata({ schema: { fields: [...metadata.schema.fields, ...missing] } });
+  logger.info(`BigQuery table ${table}: added ${missing.map((f) => f.name).join(', ')}`);
+}
+
 async function ensureAllTables() {
   if (!isEnabled()) return { enabled: false, tables: [] };
 
@@ -80,6 +96,8 @@ async function ensureAllTables() {
     if (!exists) {
       await dataset.createTable(table, { schema });
       logger.info(`BigQuery table created: ${table}`);
+    } else {
+      await addMissingColumns(bqTable, table, schema);
     }
     ensured.push(table);
   }

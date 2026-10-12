@@ -111,34 +111,52 @@ function serializePreferences(preferences) {
   return { compact, serialized };
 }
 
+/**
+ * Memory is per bot number: (owner_phone of the chat, student phone). A student
+ * talking to two of our numbers gets two independent memories.
+ */
+function resolveMemoryKey(chatProfileOrId) {
+  const profile =
+    chatProfileOrId && typeof chatProfileOrId === 'object'
+      ? chatProfileOrId
+      : chatProfileService.findById(chatProfileOrId);
+  const phone = resolveStudentPhone(profile);
+  if (!profile || !phone) return null;
+  return { ownerPhone: normalizePhone(profile.owner_phone || ''), phone };
+}
+
 class UserMemoryService {
-  getRowByPhone(phone) {
-    if (!phone) return null;
+  getRow(key) {
+    if (!key) return null;
     const db = getDatabase();
     return (
-      db.prepare('SELECT phone, preferences, last_conversation_summary, updated_at FROM student_user_memory WHERE phone = ?').get(phone) ||
-      null
+      db
+        .prepare(
+          `SELECT phone, preferences, last_conversation_summary, updated_at
+           FROM student_user_memory WHERE owner_phone = ? AND phone = ?`
+        )
+        .get(key.ownerPhone, key.phone) || null
     );
   }
 
-  ensureRow(phone) {
-    if (!phone) return null;
+  ensureRow(key) {
+    if (!key) return null;
     const db = getDatabase();
     db.prepare(
-      `INSERT INTO student_user_memory (phone, preferences, last_conversation_summary)
-       VALUES (?, NULL, NULL)
-       ON CONFLICT(phone) DO NOTHING`
-    ).run(phone);
-    return this.getRowByPhone(phone);
+      `INSERT INTO student_user_memory (owner_phone, phone, preferences, last_conversation_summary)
+       VALUES (?, ?, NULL, NULL)
+       ON CONFLICT(owner_phone, phone) DO NOTHING`
+    ).run(key.ownerPhone, key.phone);
+    return this.getRow(key);
   }
 
-  getPreferencesByPhone(phone) {
-    return parseStored(this.getRowByPhone(phone)?.preferences);
+  getPreferencesForKey(key) {
+    return parseStored(this.getRow(key)?.preferences);
   }
 
   getPreferences(chatProfileOrId) {
-    const phone = resolveStudentPhone(chatProfileOrId);
-    if (phone) return this.getPreferencesByPhone(phone);
+    const key = resolveMemoryKey(chatProfileOrId);
+    if (key) return this.getPreferencesForKey(key);
 
     // Legacy fallback while migrating old profile-scoped rows.
     const profileId =
@@ -153,22 +171,22 @@ class UserMemoryService {
     return parseStored(row?.user_preferences);
   }
 
-  savePreferencesByPhone(phone, preferences) {
-    if (!phone) return {};
-    this.ensureRow(phone);
+  savePreferencesForKey(key, preferences) {
+    if (!key) return {};
+    this.ensureRow(key);
     const { compact, serialized } = serializePreferences(preferences);
     const db = getDatabase();
     db.prepare(
       `UPDATE student_user_memory
        SET preferences = ?, updated_at = datetime('now')
-       WHERE phone = ?`
-    ).run(serialized, phone);
+       WHERE owner_phone = ? AND phone = ?`
+    ).run(serialized, key.ownerPhone, key.phone);
     return compact || {};
   }
 
   mergeAndSave(chatProfileOrId, incoming) {
-    const phone = resolveStudentPhone(chatProfileOrId);
-    if (!phone) {
+    const key = resolveMemoryKey(chatProfileOrId);
+    if (!key) {
       logger.warn(
         `User memory skipped — no resolvable student phone for profile ${
           chatProfileOrId?.id || chatProfileOrId
@@ -177,36 +195,36 @@ class UserMemoryService {
       return {};
     }
     if (!isPlainObject(incoming) || !Object.keys(incoming).length) {
-      return this.getPreferencesByPhone(phone);
+      return this.getPreferencesForKey(key);
     }
 
-    const merged = mergePreferences(this.getPreferencesByPhone(phone), incoming);
-    const saved = this.savePreferencesByPhone(phone, merged);
+    const merged = mergePreferences(this.getPreferencesForKey(key), incoming);
+    const saved = this.savePreferencesForKey(key, merged);
     logger.info(
-      `User memory updated for phone ${phone}: keys=${Object.keys(saved).join(',') || 'none'}`
+      `User memory updated for phone ${key.phone} (bot ${key.ownerPhone}): keys=${Object.keys(saved).join(',') || 'none'}`
     );
     return saved;
   }
 
   saveConversationSummary(chatProfileOrId, summary) {
-    const phone = resolveStudentPhone(chatProfileOrId);
+    const key = resolveMemoryKey(chatProfileOrId);
     const text = typeof summary === 'string' ? summary.trim().slice(0, MAX_SUMMARY_CHARS) : '';
-    if (!phone || !text) return null;
+    if (!key || !text) return null;
 
-    this.ensureRow(phone);
+    this.ensureRow(key);
     const db = getDatabase();
     db.prepare(
       `UPDATE student_user_memory
        SET last_conversation_summary = ?, updated_at = datetime('now')
-       WHERE phone = ?`
-    ).run(text, phone);
-    logger.info(`Stored conversation summary for phone ${phone}`);
+       WHERE owner_phone = ? AND phone = ?`
+    ).run(text, key.ownerPhone, key.phone);
+    logger.info(`Stored conversation summary for phone ${key.phone} (bot ${key.ownerPhone})`);
     return text;
   }
 
   getSummaryContext(chatProfileOrId) {
-    const phone = resolveStudentPhone(chatProfileOrId);
-    const latest = phone ? this.getRowByPhone(phone)?.last_conversation_summary || '' : '';
+    const key = resolveMemoryKey(chatProfileOrId);
+    const latest = key ? this.getRow(key)?.last_conversation_summary || '' : '';
     if (!latest.trim()) return '';
 
     const context = `Previous conversation summary (internal — use for continuity, do not dump to student):\n${latest}`;

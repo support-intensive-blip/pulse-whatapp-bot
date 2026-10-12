@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { dataApi } from '../api/client';
 
-const BACKGROUND_PARAMS = { status: 'pending' };
+// Background feed = items still needing work (open + in progress).
+const BACKGROUND_PARAMS = { status: 'active' };
 
 let state = {
   items: [],
-  counts: { pending: 0, done: 0, cancelled: 0, total: 0 },
+  counts: { open: 0, in_progress: 0, resolved: 0, closed: 0, pending: 0, total: 0 },
   loading: true,
   refreshing: false,
   lastParams: BACKGROUND_PARAMS,
@@ -23,13 +24,15 @@ function emit() {
 }
 
 function countsToMap(rows) {
-  const map = { pending: 0, done: 0, cancelled: 0, total: 0 };
+  const map = { open: 0, in_progress: 0, resolved: 0, closed: 0, pending: 0, total: 0 };
   for (const row of rows || []) {
     if (row.status in map) {
       map[row.status] = row.count;
     }
     map.total += row.count;
   }
+  // "pending" = still needs someone (badge count).
+  map.pending = map.open + map.in_progress;
   return map;
 }
 
@@ -130,18 +133,18 @@ export function useActionItemsFeed(queryParams = null) {
     state = {
       ...state,
       items: previousItems.map((item) =>
-        item.id === id ? { ...item, status: 'done' } : item
+        item.id === id ? { ...item, status: 'resolved' } : item
       ),
       counts: {
         ...state.counts,
         pending: Math.max(0, state.counts.pending - 1),
-        done: state.counts.done + 1,
+        resolved: state.counts.resolved + 1,
       },
     };
     emit();
 
     try {
-      await dataApi.updateActionItem(id, 'done');
+      await dataApi.updateActionItem(id, 'resolved');
       await fetchActionItemsFeed(state.lastParams, { silent: true });
     } catch {
       state = { ...state, items: previousItems };

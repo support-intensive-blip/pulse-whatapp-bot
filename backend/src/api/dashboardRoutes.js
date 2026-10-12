@@ -1,20 +1,20 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const multer = require('multer');
 const { login } = require('../services/dashboardAuthService');
 const { dashboardUserService } = require('../services/dashboardUserService');
-const { botAccountService, BOT_STATUS } = require('../services/botAccountService');
-const { actionItemService, ACTION_STATUS, ACTION_SOURCES } = require('../services/actionItemService');
-const { requireAuth } = require('./middleware/auth');
-const { resolveOwnerPhone, fastOwnerPhone, canAccessChatProfile, syncChatsIfReady, getBotConnectionState } = require('./dashboardHelpers');
-const { formatUserFacingError, normalizePhone, canonicalContactPhone } = require('../utils/helpers');
+const { botAccountService } = require('../services/botAccountService');
+const { teamService } = require('../services/teamService');
+const { requireAuth, requireRole, requireTeam, botForProfile, canAccessProfile } = require('./middleware/auth');
+const { parseActiveFlag, parseCsvMessages, parseCsvAiBulk } = require('./csvUtils');
+const { formatUserFacingError, canonicalContactPhone } = require('../utils/helpers');
+const { runWithBot } = require('../utils/botContext');
 const botManager = require('../bot/botManager');
 const conversationService = require('../services/conversationService');
 const chatRelayService = require('../services/chatRelayService');
 const chatProfileService = require('../services/chatProfileService');
 const memoryService = require('../services/memoryService');
 const chatService = require('../services/chatService');
+const { actionItemService, ACTION_SOURCES } = require('../services/actionItemService');
 const { tokenUsageService } = require('../services/tokenUsageService');
 const reminderService = require('../services/reminderService');
 const noteService = require('../services/noteService');
@@ -23,99 +23,49 @@ const { registerImportedContactOnWhatsApp, registerImportedContactsBatch } = req
 const { pushSubscriptionService } = require('../services/pushSubscriptionService');
 const { pushNotificationService } = require('../services/pushNotificationService');
 const { dashboardAlertService } = require('../services/dashboardAlertService');
+const { createTeamRouter } = require('./teamRoutes');
+const { createUserRouter } = require('./userRoutes');
+const { createBotRouter } = require('./botRoutes');
+const { createKnowledgeRouter } = require('./knowledgeRoutes');
+const { createContactRouter } = require('./contactRoutes');
+const { createActionItemRouter } = require('./actionItemRoutes');
+const { createAnalyticsRouter } = require('./analyticsRoutes');
 const logger = require('../utils/logger');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-function parseCsvRows(csvText) {
-  const rows = [];
-  let field = '';
-  let row = [];
-  let inQuotes = false;
-  const text = `${csvText || ''}\n`;
+const STATS_CACHE_TTL_MS = 30 * 1000;
 
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    const next = text[i + 1];
+/** Bots the request is narrowed to (?botId= / x-bot-id), else every team bot. */
+function selectedBots(req) {
+  const ids = new Set(req.scope.botIds);
+  return req.scope.bots.filter((bot) => ids.has(bot.id));
+}
 
-    if (ch === '"') {
-      if (inQuotes && next === '"') {
-        field += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === ',' && !inQuotes) {
-      row.push(field);
-      field = '';
-    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
-      if (ch === '\r' && next === '\n') i += 1;
-      if (field.length > 0 || row.length > 0) {
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = '';
-      }
-    } else {
-      field += ch;
-    }
+/** Single bot for write actions on "the" number (import etc.). */
+function resolveSingleBot(req, explicitBotId = null) {
+  const id = Number(explicitBotId) || (req.scope.botIds.length === 1 ? req.scope.botIds[0] : null);
+  return id ? req.scope.bots.find((bot) => bot.id === id) || null : null;
+}
+
+/** Loads a chat profile the caller may access, or answers 404. */
+function loadScopedProfile(req, res) {
+  const profile = chatProfileService.findById(parseInt(req.params.chatProfileId, 10));
+  if (!profile || !canAccessProfile(req.scope, profile)) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return null;
   }
-
-  return rows;
+  return profile;
 }
 
-function parseCsvMessages(csvText) {
-  const rows = parseCsvRows(csvText).filter((r) => r.some((c) => String(c || '').trim()));
-  if (rows.length < 2) return [];
-
-  const headers = rows[0].map((h) => String(h || '').trim().toLowerCase());
-  const getIndex = (names) => headers.findIndex((h) => names.includes(h));
-
-  const idxContactName = getIndex(['contact_name', 'contactname', 'name']);
-  const idxContactPhone = getIndex(['contact_phone', 'contactphone', 'phone']);
-  const idxRole = getIndex(['role']);
-  const idxContent = getIndex(['content', 'message', 'text']);
-  const idxTimestamp = getIndex(['timestamp', 'time', 'created_at']);
-  const idxEnableAi = getIndex(['enable_ai', 'enableai', 'ai', 'active']);
-
-  if (idxContent < 0) return [];
-
-  return rows.slice(1).map((r) => ({
-    contactName: idxContactName >= 0 ? String(r[idxContactName] || '').trim() : '',
-    contactPhone: idxContactPhone >= 0 ? String(r[idxContactPhone] || '').trim() : '',
-    role: idxRole >= 0 ? String(r[idxRole] || '').trim().toLowerCase() : 'user',
-    content: String(r[idxContent] || '').trim(),
-    timestamp: idxTimestamp >= 0 ? String(r[idxTimestamp] || '').trim() : '',
-    enableAi: idxEnableAi >= 0 ? parseActiveFlag(r[idxEnableAi], null) : null,
-  }));
+function withBotInfo(chat, bot) {
+  if (!chat || !bot) return chat;
+  return { ...chat, botId: bot.id, botName: bot.name, botPhone: botAccountService.getPhone(bot) };
 }
 
-function parseActiveFlag(value, fallback = true) {
-  if (value == null || value === '') return fallback;
-  const v = String(value).trim().toLowerCase();
-  if (['true', '1', 'yes', 'on', 'enable', 'enabled'].includes(v)) return true;
-  if (['false', '0', 'no', 'off', 'disable', 'disabled'].includes(v)) return false;
-  return fallback;
-}
-
-function parseCsvAiBulk(csvText) {
-  const rows = parseCsvRows(csvText).filter((r) => r.some((c) => String(c || '').trim()));
-  if (rows.length < 2) return [];
-
-  const headers = rows[0].map((h) => String(h || '').trim().toLowerCase());
-  const getIndex = (names) => headers.findIndex((h) => names.includes(h));
-  const idxName = getIndex(['contact_name', 'contactname', 'name']);
-  const idxActive = getIndex(['active', 'enable_ai', 'enableai', 'ai']);
-
-  if (idxName < 0) return [];
-
-  return rows
-    .slice(1)
-    .map((r) => ({
-      name: String(r[idxName] || '').trim(),
-      active: idxActive >= 0 ? parseActiveFlag(r[idxActive], null) : null,
-    }))
-    .filter((row) => row.name);
+function connectionSummary(bots) {
+  const connected = bots.filter((bot) => botManager.getBot(bot.id)?.isReady).length;
+  return { connected: connected > 0, connectedCount: connected, numberCount: bots.length };
 }
 
 function bulkUpdateAssistantForContacts(ownerPhone, entries, defaultActive = true) {
@@ -149,59 +99,16 @@ function bulkUpdateAssistantForContacts(ownerPhone, entries, defaultActive = tru
   return updatedChats;
 }
 
-function getUserBot(req) {
-  const userId = req.dashboardUser?.id;
-  const ownBot = botAccountService.findByDashboardUserId(userId);
-  if (!ownBot || !userId) return ownBot || null;
-
-  // Never borrow another user's live WhatsApp session — that shared QR/Connect
-  // and chats across team members. Only reconcile with a live client that
-  // belongs to this same dashboard user (stale status row edge case).
-  if (ownBot.status === BOT_STATUS.READY) return ownBot;
-
-  const liveReadyBot = botManager.getAnyReadyBot();
-  const liveBotId = liveReadyBot?.getStatus?.()?.botAccountId;
-  if (liveBotId) {
-    const liveAccount = botAccountService.findById(liveBotId);
-    if (liveAccount?.dashboard_user_id === userId) {
-      return liveAccount;
-    }
-  }
-
-  return ownBot;
-}
-
-function resolveStatsOwnerPhones(manager, bot) {
-  const phones = new Set();
-  const add = (value) => {
-    const normalized = normalizePhone(value);
-    if (normalized) phones.add(normalized);
-  };
-
-  add(fastOwnerPhone(bot));
-  if (bot) {
-    add(bot.whatsapp_phone);
-    add(bot.last_whatsapp_phone);
-  }
-  add(manager.coach_phone);
-
-  return [...phones];
-}
-
 const statsCache = new Map();
 
-function getCachedStats(botId) {
-  const entry = statsCache.get(botId);
+function getCachedStats(key) {
+  const entry = statsCache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.at > STATS_CACHE_TTL_MS) {
-    statsCache.delete(botId);
+    statsCache.delete(key);
     return null;
   }
   return entry.data;
-}
-
-function setCachedStats(botId, data) {
-  statsCache.set(botId, { at: Date.now(), data });
 }
 
 function createDashboardRouter() {
@@ -220,34 +127,22 @@ function createDashboardRouter() {
     return res.json(result);
   });
 
+  // Who am I + the team/numbers the dashboard shell needs (selectors, nav).
   router.get('/auth/me', requireAuth, (req, res) => {
-    let bot = getUserBot(req);
-    const user = dashboardUserService.findById(req.dashboardUser.id);
-    if (!bot && user) {
-      bot = botAccountService.createForUser(user.id, user.name);
-    }
-    const refreshed = bot ? botAccountService.findById(bot.id) : null;
-
-    if (refreshed) {
-      resolveOwnerPhone(refreshed).catch(() => {});
-    }
-
-    const liveStatus = refreshed ? botManager.getStatus(refreshed.id) : null;
-    const connection = refreshed ? getBotConnectionState(refreshed) : null;
-    const publicBot = refreshed ? botAccountService.toPublic(refreshed) : null;
-
+    const { scope } = req;
+    const bots = scope.bots.map((bot) => ({
+      ...botAccountService.toSummary(bot),
+      connected: Boolean(botManager.getBot(bot.id)?.isReady),
+    }));
     res.json({
-      user,
-      bot: publicBot
-        ? {
-            ...publicBot,
-            status: liveStatus?.live?.ready ? BOT_STATUS.READY : publicBot.status,
-            live: liveStatus?.live,
-            connected: connection?.connected ?? false,
-            reconnecting: connection?.reconnecting ?? false,
-            hasSession: connection?.hasSession ?? false,
-          }
-        : null,
+      user: dashboardUserService.toPublic(req.dashboardUser),
+      team: teamService.toPublic(scope.team),
+      teams: scope.isOwner ? teamService.listWithStats().map((team) => teamService.toPublic(team)) : undefined,
+      bots,
+      permissions: {
+        isOwner: scope.isOwner,
+        isAdmin: scope.isAdmin,
+      },
     });
   });
 
@@ -265,10 +160,10 @@ function createDashboardRouter() {
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
-    return res.json({ user: result.user });
+    return res.json({ user: dashboardUserService.toPublic(result.user) });
   });
 
-  router.get('/admin/sqlite-guard', requireAuth, (req, res) => {
+  router.get('/admin/sqlite-guard', requireAuth, requireRole('owner'), (req, res) => {
     const {
       isDeletionGuardEnabled,
       getSqlitePaths,
@@ -290,7 +185,7 @@ function createDashboardRouter() {
     });
   });
 
-  router.post('/admin/sqlite-backup', requireAuth, (req, res) => {
+  router.post('/admin/sqlite-backup', requireAuth, requireRole('owner'), (req, res) => {
     try {
       const { backupSqliteDatabase } = require('../database/sqliteGuard');
       const result = backupSqliteDatabase({ reason: 'admin-api' });
@@ -300,7 +195,7 @@ function createDashboardRouter() {
     }
   });
 
-  router.post('/admin/sqlite-purge', requireAuth, (req, res) => {
+  router.post('/admin/sqlite-purge', requireAuth, requireRole('owner'), (req, res) => {
     try {
       const {
         assertDeletionPassword,
@@ -336,66 +231,6 @@ function createDashboardRouter() {
     }
   });
 
-  router.get('/bot', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    if (!bot) {
-      return res.status(404).json({ error: 'No bot account' });
-    }
-    res.json(botManager.getStatus(bot.id));
-  });
-
-  // (Re)start the Gallabox bot after GALLABOX_* env changes. There is no QR or
-  // pairing step any more — the number is connected in Gallabox itself.
-  router.post('/bot/start', requireAuth, async (req, res) => {
-    try {
-      const bot = getUserBot(req);
-      if (!bot) {
-        return res.status(404).json({ error: 'No bot account' });
-      }
-      await botManager.startConfiguredBot();
-      res.json(botManager.getStatus(bot.id));
-    } catch (error) {
-      logger.error(`Bot start failed: ${error.message}`);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  router.post('/bot/stop', requireAuth, async (req, res) => {
-    try {
-      const bot = getUserBot(req);
-      if (!bot) {
-        return res.status(404).json({ error: 'No bot account' });
-      }
-      await botManager.stopBot(bot.id);
-      res.json(botManager.getStatus(bot.id));
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  router.patch('/bot/settings', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    if (!bot) {
-      return res.status(404).json({ error: 'No bot account' });
-    }
-
-    let updated;
-    try {
-      updated = botAccountService.updateSettings(bot.id, {
-        name: req.body?.name,
-        assistantName: req.body?.assistantName,
-        assistantSelfEnabled: req.body?.assistantSelfEnabled,
-        assistantContactsEnabled: req.body?.assistantContactsEnabled,
-        testModeEnabled: req.body?.testModeEnabled,
-        testNumbers: req.body?.testNumbers,
-      });
-    } catch (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    res.json(botAccountService.toPublic(updated));
-  });
-
   router.get('/notifications/vapid-public-key', requireAuth, (req, res) => {
     res.json({ publicKey: pushNotificationService.getPublicKey() });
   });
@@ -410,7 +245,6 @@ function createDashboardRouter() {
       subscription,
       userAgent: req.headers['user-agent'] || null,
     });
-    const logger = require('../utils/logger');
     logger.info(`Push subscription saved for dashboard user ${req.dashboardUser.id}`);
     return res.json({ subscribed: true });
   });
@@ -448,149 +282,107 @@ function createDashboardRouter() {
     return res.json({ marked: count, unreadCount: 0 });
   });
 
-  router.post('/conversations/sync', requireAuth, async (req, res) => {
-    try {
-      const bot = getUserBot(req);
-      if (!bot) return res.status(404).json({ error: 'No bot account' });
+  // ---- Unified inbox (all numbers of the team, or one via ?botId=) ----
 
-      const syncResult = await syncChatsIfReady(bot);
-      const ownerPhone = await resolveOwnerPhone(bot);
-      const search = req.query.search || '';
-      const chats = ownerPhone
-        ? conversationService.listForOwner(ownerPhone, { search, consolidate: false })
-        : [];
-      const connection = getBotConnectionState(bot);
-
-      const connected = syncResult.connected || connection.connected;
-      let message;
-      if (!connected) {
-        message = 'WhatsApp (Gallabox) is not connected — see the Connect page.';
-      } else if (chats.length === 0) {
-        message = 'No chats yet. Chats appear here as soon as someone messages your WhatsApp number.';
-      }
-
-      res.json({
-        synced: syncResult.syncedCount > 0,
-        syncedCount: syncResult.syncedCount,
-        connected,
-        reconnecting: syncResult.reconnecting || connection.reconnecting,
-        hasSession: connection.hasSession,
-        message,
-        count: chats.length,
-        chats,
-      });
-    } catch (error) {
-      res.status(503).json({
-        error: 'Could not load chats. Try again in a moment.',
-        detail: error.message,
-      });
-    }
-  });
-
-  router.get('/conversations', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    const { connected, reconnecting, hasSession } = getBotConnectionState(bot);
-    const ownerPhone = fastOwnerPhone(bot);
-
-    if (ownerPhone && bot && !bot.whatsapp_phone) {
-      resolveOwnerPhone(bot).catch(() => {});
-    }
-
-    if (!ownerPhone) {
-      return res.json({
-        chats: [],
-        connected,
-        reconnecting,
-        hasSession,
-        message: connected
-          ? 'No chats yet — they appear as people message your WhatsApp number.'
-          : 'WhatsApp (Gallabox) is not connected — see the Connect page.',
-      });
-    }
-
-    const search = req.query.search || '';
+  function listInbox(req) {
+    const bots = selectedBots(req);
     const assistantFilter = String(req.query.assistant || 'all').toLowerCase();
-    const assistant = ['all', 'enabled', 'disabled'].includes(assistantFilter)
-      ? assistantFilter
-      : 'all';
-    const chats = conversationService.listForOwner(ownerPhone, { search, assistant });
-
-    res.json({
-      connected,
-      reconnecting,
-      hasSession,
-      count: chats.length,
-      chats,
-      syncedAt: new Date().toISOString(),
+    const assigned = req.query.assigned === 'me' ? req.dashboardUser.id : req.query.assigned || null;
+    const chats = conversationService.listForBots(bots, {
+      search: req.query.search || '',
+      assistant: ['all', 'enabled', 'disabled'].includes(assistantFilter) ? assistantFilter : 'all',
+      tag: req.query.tag || '',
+      assignedUserId: assigned,
+      awaiting: req.query.awaiting === '1' || req.query.awaiting === 'true',
+      limit: Math.min(parseInt(req.query.limit, 10) || 300, 1000),
     });
+    const connection = connectionSummary(bots);
+    let message;
+    if (!bots.length) {
+      message = 'No WhatsApp number is connected to this team yet.';
+    } else if (!chats.length) {
+      message = connection.connected
+        ? 'No chats yet — they appear as people message your WhatsApp numbers.'
+        : 'WhatsApp (Gallabox) is not connected — see AI Bots.';
+    }
+    return { chats, count: chats.length, ...connection, reconnecting: false, hasSession: connection.connected, message, syncedAt: new Date().toISOString() };
+  }
+
+  router.get('/conversations', requireAuth, requireTeam, (req, res) => {
+    res.json(listInbox(req));
   });
 
-  router.patch('/conversations/:chatProfileId/assistant', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    const chatProfileId = parseInt(req.params.chatProfileId, 10);
-    let profile = chatProfileService.findById(chatProfileId);
-
-    if (!profile || !canAccessChatProfile(bot, profile)) {
-      return res.status(404).json({ error: 'Conversation not found' });
+  // Gallabox has no "list chats" API; kept for the dashboard's refresh button.
+  router.post('/conversations/sync', requireAuth, requireTeam, (req, res) => {
+    try {
+      res.json({ synced: false, syncedCount: 0, ...listInbox(req) });
+    } catch (error) {
+      res.status(503).json({ error: 'Could not load chats. Try again in a moment.', detail: error.message });
     }
+  });
 
-    // Avoid full-owner consolidation here — with 10k+ chats it blocks the
-    // event loop and makes the dashboard appear stuck loading.
-    profile = chatProfileService.consolidateProfileGroup(profile, ownerPhone);
+  router.patch('/conversations/:chatProfileId/assistant', requireAuth, (req, res) => {
+    let profile = loadScopedProfile(req, res);
+    if (!profile) return undefined;
 
     const active = req.body?.active;
     if (typeof active !== 'boolean') {
       return res.status(400).json({ error: 'active (boolean) is required' });
     }
+
+    // Avoid full-owner consolidation here — with 10k+ chats it blocks the
+    // event loop and makes the dashboard appear stuck loading.
+    profile = chatProfileService.consolidateProfileGroup(profile, profile.owner_phone) || profile;
 
     const updated = active
       ? chatProfileService.enableAssistantExplicit(profile.id)
       : chatProfileService.disableAssistant(profile.id);
 
-    res.json({ chat: conversationService.enrichChat(updated) });
+    return res.json({ chat: withBotInfo(conversationService.enrichChat(updated), botForProfile(req.scope, updated)) });
   });
 
-  router.patch('/conversations/assistant/bulk-all', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
+  // Tags, assignee, notes, display name.
+  router.patch('/conversations/:chatProfileId/contact', requireAuth, (req, res) => {
+    const profile = loadScopedProfile(req, res);
+    if (!profile) return undefined;
+
+    const { tags, assignedUserId, contactNotes, contactName } = req.body || {};
+    if (assignedUserId) {
+      const assignee = dashboardUserService.findById(assignedUserId);
+      const sameTeam = assignee && (assignee.team_id === req.scope.teamId || assignee.role === 'owner');
+      if (!sameTeam || !assignee.is_active) {
+        return res.status(400).json({ error: 'Assignee must be an active member of this team' });
+      }
+    }
+    if (tags !== undefined && !Array.isArray(tags)) {
+      return res.status(400).json({ error: 'tags must be a list' });
     }
 
+    const updated = chatProfileService.updateContactDetails(profile.id, { tags, assignedUserId, contactNotes, contactName });
+    return res.json({ chat: withBotInfo(conversationService.enrichChat(updated), botForProfile(req.scope, updated)) });
+  });
+
+  router.patch('/conversations/assistant/bulk-all', requireAuth, requireRole('admin'), requireTeam, (req, res) => {
     const active = req.body?.active;
     if (typeof active !== 'boolean') {
       return res.status(400).json({ error: 'active (boolean) is required' });
     }
 
-    const ownerUser =
-      userService.findByPhone(ownerPhone) ||
-      userService.getOrCreate(`${ownerPhone}@c.us`, null);
-
-    if (active) {
-      userService.setAssistantContacts(ownerUser.id, true);
-    } else {
-      userService.setAssistantContacts(ownerUser.id, false);
-      chatProfileService.forceDisableAllContactAssistants(ownerPhone);
+    const bots = selectedBots(req);
+    for (const bot of bots) {
+      const ownerPhone = botAccountService.getPhone(bot);
+      if (!ownerPhone) continue;
+      const ownerUser =
+        userService.findByPhone(ownerPhone) || userService.getOrCreate(`${ownerPhone}@c.us`, null);
+      userService.setAssistantContacts(ownerUser.id, active);
+      if (!active) chatProfileService.forceDisableAllContactAssistants(ownerPhone);
     }
 
-    const chats = conversationService.listForOwner(ownerPhone);
-    const contacts = chats.filter((c) => c.chatType !== 'self');
-
-    return res.json({
-      active,
-      updatedCount: contacts.length,
-      chats: contacts,
-    });
+    const contacts = conversationService.listForBots(bots).filter((c) => c.chatType !== 'self');
+    return res.json({ active, updatedCount: contacts.length, chats: contacts });
   });
 
-  router.patch('/conversations/assistant/bulk', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
-    }
-
+  router.patch('/conversations/assistant/bulk', requireAuth, requireRole('admin'), requireTeam, (req, res) => {
     const active = req.body?.active;
     const names = Array.isArray(req.body?.contactNames) ? req.body.contactNames : [];
     if (typeof active !== 'boolean' || names.length === 0) {
@@ -598,49 +390,47 @@ function createDashboardRouter() {
     }
 
     const tokens = names.map((n) => String(n || '').trim()).filter(Boolean);
-    const updatedChats = bulkUpdateAssistantForContacts(
-      ownerPhone,
-      tokens.map((name) => ({ name, active })),
-      active
+    const updatedChats = selectedBots(req).flatMap((bot) =>
+      bulkUpdateAssistantForContacts(
+        botAccountService.getPhone(bot),
+        tokens.map((name) => ({ name, active })),
+        active
+      )
     );
 
-    return res.json({
-      updatedCount: updatedChats.length,
-      requestedCount: tokens.length,
-      chats: updatedChats,
-    });
+    return res.json({ updatedCount: updatedChats.length, requestedCount: tokens.length, chats: updatedChats });
   });
 
-  router.post('/conversations/assistant/bulk-csv', requireAuth, upload.single('file'), async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
+  router.post(
+    '/conversations/assistant/bulk-csv',
+    requireAuth,
+    requireRole('admin'),
+    requireTeam,
+    upload.single('file'),
+    (req, res) => {
+      if (!req.file) {
+        return res.status(400).json({ error: 'CSV file is required' });
+      }
+
+      const defaultActive = parseActiveFlag(req.body?.defaultActive, true);
+      const entries = parseCsvAiBulk(req.file.buffer.toString('utf8'));
+      if (!entries.length) {
+        return res.status(400).json({ error: 'No valid rows — need contact_name column' });
+      }
+
+      const updatedChats = selectedBots(req).flatMap((bot) =>
+        bulkUpdateAssistantForContacts(botAccountService.getPhone(bot), entries, defaultActive)
+      );
+      return res.json({ updatedCount: updatedChats.length, requestedCount: entries.length, chats: updatedChats });
     }
-    if (!req.file) {
-      return res.status(400).json({ error: 'CSV file is required' });
-    }
+  );
 
-    const defaultActive = parseActiveFlag(req.body?.defaultActive, true);
-    const entries = parseCsvAiBulk(req.file.buffer.toString('utf8'));
-    if (!entries.length) {
-      return res.status(400).json({ error: 'No valid rows — need contact_name column' });
-    }
-
-    const updatedChats = bulkUpdateAssistantForContacts(ownerPhone, entries, defaultActive);
-
-    return res.json({
-      updatedCount: updatedChats.length,
-      requestedCount: entries.length,
-      chats: updatedChats,
-    });
-  });
-
-  router.post('/conversations/import', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
+  // Imports one contact with past message history into a chosen number.
+  router.post('/conversations/import', requireAuth, requireTeam, async (req, res) => {
+    const bot = resolveSingleBot(req, req.body?.botId);
+    const ownerPhone = botAccountService.getPhone(bot);
+    if (!bot || !ownerPhone) {
+      return res.status(400).json({ error: 'Choose which WhatsApp number to import into' });
     }
 
     const contactName = String(req.body?.contactName || '').trim();
@@ -656,9 +446,8 @@ function createDashboardRouter() {
     }
 
     const chatIdBase = contactPhone || contactName.toLowerCase().replace(/\s+/g, '_');
-    const chatId = `${chatIdBase}@manual.import`;
     const profile = chatProfileService.getOrCreate({
-      chatId,
+      chatId: `${chatIdBase}@manual.import`,
       ownerPhone,
       contactName: contactName || contactPhone,
       contactPhone: contactPhone || null,
@@ -690,24 +479,23 @@ function createDashboardRouter() {
 
     return res.status(201).json({
       imported: true,
-      chat: conversationService.enrichChat(finalProfile),
+      chat: withBotInfo(conversationService.enrichChat(finalProfile), bot),
       messageCount: messages.length,
       whatsappContact,
     });
   });
 
-  router.post('/conversations/import-csv', requireAuth, upload.single('file'), async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
+  router.post('/conversations/import-csv', requireAuth, requireTeam, upload.single('file'), async (req, res) => {
+    const bot = resolveSingleBot(req, req.body?.botId);
+    const ownerPhone = botAccountService.getPhone(bot);
+    if (!bot || !ownerPhone) {
+      return res.status(400).json({ error: 'Choose which WhatsApp number to import into' });
     }
     if (!req.file) {
       return res.status(400).json({ error: 'CSV file is required' });
     }
 
-    const csvText = req.file.buffer.toString('utf8');
-    const records = parseCsvMessages(csvText);
+    const records = parseCsvMessages(req.file.buffer.toString('utf8'));
     if (!records.length) {
       return res.status(400).json({ error: 'No valid records found in CSV' });
     }
@@ -729,12 +517,10 @@ function createDashboardRouter() {
       });
     });
 
-    const chats = [];
     const batchItems = [];
     for (const entry of grouped.values()) {
-      const chatId = `${entry.phone || entry.name.toLowerCase().replace(/\s+/g, '_')}@manual.import`;
       const profile = chatProfileService.getOrCreate({
-        chatId,
+        chatId: `${entry.phone || entry.name.toLowerCase().replace(/\s+/g, '_')}@manual.import`,
         ownerPhone,
         contactName: entry.name,
         contactPhone: entry.phone || null,
@@ -751,20 +537,18 @@ function createDashboardRouter() {
       });
     }
 
+    const chats = [];
     const registered = await registerImportedContactsBatch(bot.id, batchItems);
     for (const item of registered) {
-      let profile = item.profile;
+      let { profile } = item;
       if (item.enableAi) {
         chatProfileService.enableAssistantExplicit(profile.id);
         profile = chatProfileService.findById(profile.id);
       }
-      chats.push({
-        ...conversationService.enrichChat(profile),
-        whatsappContact: item.whatsapp,
-      });
+      chats.push({ ...withBotInfo(conversationService.enrichChat(profile), bot), whatsappContact: item.whatsapp });
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       imported: true,
       contacts: chats.length,
       records: records.length,
@@ -773,13 +557,7 @@ function createDashboardRouter() {
     });
   });
 
-  router.get('/conversations/export', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
-    }
-
+  router.get('/conversations/export', requireAuth, requireTeam, (req, res) => {
     const format = (req.query.format || 'json').toLowerCase();
     const ids = req.query.ids
       ? req.query.ids.split(',').map((id) => parseInt(id.trim(), 10)).filter(Boolean)
@@ -787,7 +565,9 @@ function createDashboardRouter() {
     const from = req.query.from || req.query.start || null;
     const to = req.query.to || req.query.end || null;
 
-    const data = conversationService.exportChats(ownerPhone, ids, { from, to });
+    const data = selectedBots(req).flatMap((bot) =>
+      conversationService.exportChats(botAccountService.getPhone(bot), ids, { from, to })
+    );
 
     const rangeSuffix =
       from || to
@@ -795,113 +575,74 @@ function createDashboardRouter() {
         : '';
 
     if (format === 'csv') {
-      const csv = conversationService.toCsv(data);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="chats-export${rangeSuffix}.csv"`
-      );
-      return res.send(csv);
+      res.setHeader('Content-Disposition', `attachment; filename="chats-export${rangeSuffix}.csv"`);
+      return res.send(conversationService.toCsv(data));
     }
 
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="chats-export${rangeSuffix}.json"`
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="chats-export${rangeSuffix}.json"`);
     return res.json(conversationService.toExportJson(data));
   });
 
-  router.get('/conversations/contact/:contactKey/chats', requireAuth, async (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = await resolveOwnerPhone(bot);
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'WhatsApp not connected' });
-    }
-
+  router.get('/conversations/contact/:contactKey/chats', requireAuth, requireTeam, (req, res) => {
     const contactKey = decodeURIComponent(req.params.contactKey);
     const search = req.query.search || '';
-    const chats = conversationService.listChatsForContact(ownerPhone, contactKey, { search });
-
-    res.json({
-      contactKey,
-      count: chats.length,
-      chats,
-    });
+    const chats = selectedBots(req).flatMap((bot) =>
+      conversationService
+        .listChatsForContact(botAccountService.getPhone(bot), contactKey, { search })
+        .map((chat) => withBotInfo(chat, bot))
+    );
+    res.json({ contactKey, count: chats.length, chats });
   });
 
   router.get('/conversations/:chatProfileId/messages', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    const ownerPhone = fastOwnerPhone(bot);
-    const chatProfileId = parseInt(req.params.chatProfileId, 10);
-    let profile = chatProfileService.findById(chatProfileId);
+    let profile = loadScopedProfile(req, res);
+    if (!profile) return undefined;
 
-    if (!profile || !canAccessChatProfile(bot, profile)) {
-      return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    profile =
-      chatProfileService.consolidateProfileGroup(profile, ownerPhone) || profile;
+    profile = chatProfileService.consolidateProfileGroup(profile, profile.owner_phone) || profile;
 
     const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
     const sinceId = req.query.since ? parseInt(req.query.since, 10) : null;
     const siblingIds = chatProfileService.getSiblingProfiles(profile).map((p) => p.id);
     const profileIds = siblingIds.length ? siblingIds : [profile.id];
     const messages = memoryService.getMessagesForProfiles(profileIds, limit, { sinceId });
-    const liveBot = botManager.getBot(bot?.id);
+    const bot = botForProfile(req.scope, profile);
 
-    res.json({
-      chat: conversationService.enrichChat(profile),
+    return res.json({
+      chat: withBotInfo(conversationService.enrichChat(profile), bot),
       messages,
-      connected: Boolean(liveBot?.isReady),
+      connected: Boolean(bot && botManager.getBot(bot.id)?.isReady),
       syncedAt: new Date().toISOString(),
     });
   });
 
   router.post('/conversations/:chatProfileId/messages', requireAuth, async (req, res) => {
     try {
-      const bot = getUserBot(req);
-      if (!bot) return res.status(404).json({ error: 'No bot account' });
+      const profile = loadScopedProfile(req, res);
+      if (!profile) return undefined;
+      const bot = botForProfile(req.scope, profile);
+      if (!bot) return res.status(404).json({ error: 'This chat’s WhatsApp number is no longer connected' });
 
-      const chatProfileId = parseInt(req.params.chatProfileId, 10);
-      let profile = chatProfileService.findById(chatProfileId);
-
-      if (!profile || !canAccessChatProfile(bot, profile)) {
-        return res.status(404).json({ error: 'Conversation not found' });
-      }
-
-      const ownerPhone = fastOwnerPhone(bot);
-      profile =
-        chatProfileService.consolidateProfileGroup(profile, ownerPhone) || profile;
-
-      const content = req.body?.content;
-      const result = await chatRelayService.sendOwnerMessage(bot.id, profile.id, content);
-      res.json({
+      const result = await chatRelayService.sendOwnerMessage(bot.id, profile.id, req.body?.content);
+      return res.json({
         message: result.message,
-        chat: conversationService.enrichChat(result.chat || profile),
+        chat: withBotInfo(conversationService.enrichChat(result.chat || profile), bot),
       });
     } catch (error) {
-      res.status(400).json({ error: formatUserFacingError(error) });
+      return res.status(400).json({ error: formatUserFacingError(error) });
     }
   });
 
   router.post('/conversations/:chatProfileId/summarize', requireAuth, async (req, res) => {
     try {
-      const bot = getUserBot(req);
-      const chatProfileId = parseInt(req.params.chatProfileId, 10);
-      const profile = chatProfileService.findById(chatProfileId);
-
-      if (!profile || !canAccessChatProfile(bot, profile)) {
-        return res.status(404).json({ error: 'Conversation not found' });
-      }
-
-      const summary = await chatService.generateSummary(chatProfileId);
-      res.json({
-        summary,
-        contactName: profile.contact_name || 'Contact',
-      });
+      const profile = loadScopedProfile(req, res);
+      if (!profile) return undefined;
+      const bot = botForProfile(req.scope, profile);
+      const summary = await runWithBot(bot?.id, () => chatService.generateSummary(profile.id));
+      return res.json({ summary, contactName: profile.contact_name || 'Contact' });
     } catch (error) {
-      res.status(500).json({ error: formatUserFacingError(error) });
+      return res.status(500).json({ error: formatUserFacingError(error) });
     }
   });
 
@@ -909,21 +650,14 @@ function createDashboardRouter() {
   // Cannot restore past Pulse bubbles onto mobile/web — WhatsApp owns history.
   router.post('/conversations/:chatProfileId/summarize-to-whatsapp', requireAuth, async (req, res) => {
     try {
-      const bot = getUserBot(req);
-      if (!bot) return res.status(404).json({ error: 'No bot account' });
+      let profile = loadScopedProfile(req, res);
+      if (!profile) return undefined;
+      const bot = botForProfile(req.scope, profile);
+      if (!bot) return res.status(404).json({ error: 'This chat’s WhatsApp number is no longer connected' });
 
-      const chatProfileId = parseInt(req.params.chatProfileId, 10);
-      let profile = chatProfileService.findById(chatProfileId);
+      profile = chatProfileService.consolidateProfileGroup(profile, profile.owner_phone) || profile;
 
-      if (!profile || !canAccessChatProfile(bot, profile)) {
-        return res.status(404).json({ error: 'Conversation not found' });
-      }
-
-      const ownerPhone = fastOwnerPhone(bot);
-      profile =
-        chatProfileService.consolidateProfileGroup(profile, ownerPhone) || profile;
-
-      const summary = await chatService.generateSummary(profile.id);
+      const summary = await runWithBot(bot.id, () => chatService.generateSummary(profile.id));
       if (!summary || !String(summary).trim()) {
         return res.status(400).json({ error: 'No conversation history to summarize for this chat.' });
       }
@@ -942,35 +676,25 @@ function createDashboardRouter() {
       ].join('\n');
 
       const result = await chatRelayService.sendOwnerMessage(bot.id, profile.id, content);
-      res.json({
+      return res.json({
         summary,
         message: result.message,
-        chat: conversationService.enrichChat(result.chat || profile),
+        chat: withBotInfo(conversationService.enrichChat(result.chat || profile), bot),
         contactName: profile.contact_name || 'Contact',
       });
     } catch (error) {
-      res.status(400).json({ error: formatUserFacingError(error) });
+      return res.status(400).json({ error: formatUserFacingError(error) });
     }
   });
 
-  router.post('/conversations/:chatProfileId/escalate', requireAuth, async (req, res) => {
+  router.post('/conversations/:chatProfileId/escalate', requireAuth, (req, res) => {
     try {
-      const bot = getUserBot(req);
-      const chatProfileId = parseInt(req.params.chatProfileId, 10);
-      const profile = chatProfileService.findById(chatProfileId);
+      const profile = loadScopedProfile(req, res);
+      if (!profile) return undefined;
+      const bot = botForProfile(req.scope, profile);
+      if (!bot) return res.status(400).json({ error: 'No WhatsApp number for this chat' });
 
-      if (!profile || !canAccessChatProfile(bot, profile)) {
-        return res.status(404).json({ error: 'Conversation not found' });
-      }
-
-      const ownerBot =
-        botAccountService.findByWhatsappPhone(profile.owner_phone) || bot;
-      const botAccountId = bot?.id || ownerBot?.id;
-      if (!botAccountId) {
-        return res.status(400).json({ error: 'No bot account for this chat' });
-      }
-
-      const recentMessages = memoryService.getMessages(chatProfileId, 30);
+      const recentMessages = memoryService.getMessages(profile.id, 30);
       const lastUserMsg = [...recentMessages].reverse().find((m) => m.role === 'user');
       const description = String(req.body?.description || lastUserMsg?.content || '')
         .trim()
@@ -979,21 +703,22 @@ function createDashboardRouter() {
       const title = String(req.body?.title || `Follow up: ${contactLabel}`).trim().slice(0, 120);
 
       const item = actionItemService.createEscalation({
-        botAccountId,
-        chatProfileId,
+        botAccountId: bot.id,
+        chatProfileId: profile.id,
         source: ACTION_SOURCES.MANUAL,
         title,
         description: description || `Manual escalation from dashboard for ${contactLabel}.`,
         category: 'manual',
-        priority: 'l2',
+        priority: req.body?.priority || 'high',
         dedupeKey: lastUserMsg?.id
-          ? `manual:${chatProfileId}:${lastUserMsg.id}`
-          : `manual:${chatProfileId}:${Date.now()}`,
-        assignedDashboardUserId: req.dashboardUser.id,
+          ? `manual:${profile.id}:${lastUserMsg.id}`
+          : `manual:${profile.id}:${Date.now()}`,
+        assignedDashboardUserId: req.body?.assignedUserId || req.dashboardUser.id,
+        createdByUserId: req.dashboardUser.id,
         triggerMessageId: lastUserMsg?.id || null,
       });
 
-      res.json({
+      return res.json({
         item,
         created: item.created !== false,
         message: item.created === false
@@ -1001,113 +726,50 @@ function createDashboardRouter() {
           : 'Added to Call to Action.',
       });
     } catch (error) {
-      res.status(500).json({ error: formatUserFacingError(error) });
+      return res.status(500).json({ error: formatUserFacingError(error) });
     }
   });
 
-  router.get('/action-items', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    const status = req.query.status || null;
-    const coach = req.query.coach || '';
-    const student = req.query.student || '';
-    const category = req.query.category || '';
-
-    const items = actionItemService.listGlobal({
-      status,
-      coachQuery: coach,
-      studentQuery: student,
-      category,
-    });
-    const counts = bot?.id ? actionItemService.getCounts(bot.id) : [];
-    res.json({ items, counts, scope: 'self' });
-  });
-
-  router.patch('/action-items/:id', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    const id = parseInt(req.params.id, 10);
-    const item = actionItemService.findById(id);
-
-    if (!item) {
-      return res.status(404).json({ error: 'Action item not found' });
-    }
-
-    const status = req.body?.status;
-    if (![ACTION_STATUS.DONE, ACTION_STATUS.PENDING, ACTION_STATUS.CANCELLED].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
-
-    res.json({ item: actionItemService.updateStatus(id, status) });
-  });
-
-  router.get('/stats', requireAuth, (req, res) => {
-    const bot = getUserBot(req);
-    const manager = req.dashboardUser;
-    const cacheKey = `stats-${manager.id}`;
+  router.get('/stats', requireAuth, requireTeam, (req, res) => {
+    const bots = selectedBots(req);
+    const cacheKey = `stats-${req.scope.teamId}-${bots.map((b) => b.id).join(',')}`;
     if (!req.query.fresh) {
       const cached = getCachedStats(cacheKey);
-      if (cached) {
-        return res.json(cached);
-      }
+      if (cached) return res.json(cached);
     }
 
-    const ownerPhone = fastOwnerPhone(bot);
-    if (ownerPhone && bot && !bot.whatsapp_phone) {
-      resolveOwnerPhone(bot).catch(() => {});
-    } else if (bot) {
-      resolveOwnerPhone(bot).catch(() => {});
-    }
-
-    const scope = 'self';
-    let ownerPhones = resolveStatsOwnerPhones(manager, bot);
-    const managedBotIds = bot?.id ? [bot.id] : [];
-
-    if (!ownerPhones.length) {
-      const db = require('../database/db').getDatabase();
-      ownerPhones = db
-        .prepare('SELECT DISTINCT owner_phone FROM chat_profiles WHERE owner_phone IS NOT NULL')
-        .all()
-        .map((row) => normalizePhone(row.owner_phone))
-        .filter(Boolean);
-    }
-
+    const ownerPhones = bots.map((bot) => botAccountService.getPhone(bot)).filter(Boolean);
     const counts = conversationService.getStatsForOwnerPhones(ownerPhones);
-    const emptyTokenUsage = {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-      estimated_cost_usd: 0,
-      request_count: 0,
-      byCategory: [],
-      efficiency: {
-        blockedCount: 0,
-        firewallCount: 0,
-        chatCount: 0,
-        estimatedSavingsUsd: 0,
-        avgChatCostUsd: 0,
-      },
-    };
 
     const payload = {
-      scope,
-      bot: botManager.getStatus(bot?.id),
+      scope: req.scope.botIds.length === req.scope.bots.length ? 'team' : 'number',
+      ...connectionSummary(bots),
+      bots: bots.map((bot) => ({
+        ...botAccountService.toSummary(bot),
+        connected: Boolean(botManager.getBot(bot.id)?.isReady),
+      })),
       totalChats: counts.totalChats,
       activeChats: counts.activeChats,
       totalMessages: counts.totalMessages,
       messagesToday: counts.messagesToday,
       aiResponses: counts.aiResponses,
-      tokenUsage: ownerPhones.length
-        ? tokenUsageService.getBotStats({ ownerPhones })
-        : emptyTokenUsage,
+      tokenUsage: req.scope.isAdmin && ownerPhones.length ? tokenUsageService.getBotStats({ ownerPhones }) : null,
       reminders: reminderService.getCount(),
       notes: noteService.getCount(),
-      actionItems: managedBotIds.length
-        ? actionItemService.getCountsForBots(managedBotIds)
-        : [],
+      actionItems: actionItemService.getCountsForBots(bots.map((bot) => bot.id)),
     };
 
-    setCachedStats(cacheKey, payload);
-    res.json(payload);
+    statsCache.set(cacheKey, { at: Date.now(), data: payload });
+    return res.json(payload);
   });
+
+  router.use(createTeamRouter());
+  router.use(createUserRouter());
+  router.use(createBotRouter());
+  router.use(createKnowledgeRouter());
+  router.use(createContactRouter());
+  router.use(createActionItemRouter());
+  router.use(createAnalyticsRouter());
 
   return router;
 }

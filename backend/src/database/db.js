@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { SCHEMA_SQL, MIGRATION_SQL } = require('./schema');
+const { SCHEMA_SQL, MIGRATION_SQL, studentMemoryTableSql } = require('./schema');
+const { runPlatformMigrations } = require('./platformMigrations');
 const { DATA_DIR, DB_FILENAME } = require('../utils/constants');
 const { ensureDir } = require('../utils/helpers');
 const logger = require('../utils/logger');
@@ -47,6 +48,8 @@ function tableExists(database, tableName) {
 
 function migrateChatProfilePreferencesToPhoneMemory(database) {
   if (!tableExists(database, 'student_user_memory')) return;
+  // Already rebuilt into the per-bot-number shape; this one-time copy ran before that.
+  if (columnExists(database, 'student_user_memory', 'owner_phone')) return;
   if (!columnExists(database, 'chat_profiles', 'user_preferences')) return;
 
   const { canonicalContactPhone, normalizePhone, normalizePhoneDigits } = require('../utils/helpers');
@@ -412,16 +415,8 @@ function runMigrations(database) {
     logger.info('Migration: added chat_profiles.conversation_ended_at');
   }
 
-  // Durable student memory keyed by phone (survives chat_profile churn + WhatsApp logout).
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS student_user_memory (
-      phone TEXT PRIMARY KEY NOT NULL,
-      preferences TEXT,
-      last_conversation_summary TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
+  // Durable student memory keyed by bot number + student phone (survives chat_profile churn).
+  database.exec(studentMemoryTableSql('student_user_memory'));
 
   migrateChatProfilePreferencesToPhoneMemory(database);
 
@@ -526,6 +521,8 @@ function runMigrations(database) {
     );
     logger.info('Migration: added token_usage.estimated_cost_usd');
   }
+
+  runPlatformMigrations(database, { columnExists, indexExists, tableExists });
 }
 
 function initializeDatabase() {

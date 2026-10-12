@@ -379,7 +379,21 @@ function chunkDocumentLegacy(fullText) {
   });
 }
 
+// Separates knowledge resources combined into one bot index. Each resource keeps
+// its own format detection (QUESTION_ID blocks, QA delimiters, plain prose).
+const RESOURCE_SEPARATOR = '\n\n<<<PULSE_KB_RESOURCE>>>\n\n';
+
 function chunkDocument(fullText) {
+  const parts = String(fullText || '').split(RESOURCE_SEPARATOR);
+  if (parts.length > 1) {
+    return parts
+      .flatMap((part) => (part.trim() ? chunkSingleDocument(part) : []))
+      .map((chunk, index) => ({ ...chunk, chunkIndex: index }));
+  }
+  return chunkSingleDocument(fullText);
+}
+
+function chunkSingleDocument(fullText) {
   const jsonChunks = chunkDocumentFromJson(fullText);
   if (jsonChunks?.length) return jsonChunks;
   const qaChunks = chunkDocumentByQaDelimiters(fullText);
@@ -394,6 +408,7 @@ function chunkDocumentToTexts(fullText) {
 }
 
 module.exports = {
+  RESOURCE_SEPARATOR,
   MAX_CHUNK_TOKENS,
   QA_START,
   QA_END,

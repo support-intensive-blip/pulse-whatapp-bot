@@ -206,7 +206,8 @@ class ChatService {
     const owner = userService.findById(ownerUserId);
     const chatProfile = chatProfileService.findById(chatProfileId);
     const kbTeam = await knowledgeBaseService.resolveKbTeam();
-    if (kbTeam.useKb) {
+    // A bot's own index is already built by resolveKbTeam; only the legacy global one needs this.
+    if (kbTeam.useKb && kbTeam.scope !== 'bot') {
       await knowledgeBaseService.initialize(false);
     }
     const apiKey = process.env.OPENAI_API_KEY;
@@ -386,7 +387,8 @@ class ChatService {
 
     const structured = parseStructuredReply(response);
     const polished = this.polishReply(structured.message);
-    if (this.shouldCreateTicketFromReply(structured, polished)) {
+    // Playground / eval sessions must not raise real Call-to-Action items.
+    if (!chatProfileService.isApiTestProfile(chatProfile) && this.shouldCreateTicketFromReply(structured, polished)) {
       this.raiseAssistantTicket({
         botAccountId,
         ownerPhone: owner?.phone,

@@ -119,7 +119,8 @@ function ChunkCard({ chunk }) {
   );
 }
 
-export default function AiAssistantPanel({ chat, messages = [], selectedMessage = null }) {
+/** `embedded`: rendered inside the chat side panel's tab instead of as its own column. */
+export default function AiAssistantPanel({ chat, messages = [], selectedMessage = null, embedded = false }) {
   const [summary, setSummary] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
@@ -214,7 +215,7 @@ export default function AiAssistantPanel({ chat, messages = [], selectedMessage 
   }, [focusMessage, lastUserMsg, messages]);
 
   return (
-    <aside className="hidden w-80 shrink-0 flex-col border-l border-border bg-surface xl:flex">
+    <aside className={embedded ? 'flex min-h-0 flex-1 flex-col' : 'hidden w-80 shrink-0 flex-col border-l border-border bg-surface xl:flex'}>
       <div className="border-b border-border px-4 py-4">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-soft text-primary">

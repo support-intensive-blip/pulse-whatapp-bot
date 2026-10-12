@@ -1358,6 +1358,32 @@ Message: ${text}`,
       .all();
   }
 
+  /** Dashboard-editable contact fields (tags, assignee, notes, display name). */
+  updateContactDetails(chatProfileId, { tags, assignedUserId, contactNotes, contactName } = {}) {
+    const fields = ["updated_at = datetime('now')"];
+    const values = [];
+    if (tags !== undefined) {
+      const list = [...new Set((Array.isArray(tags) ? tags : []).map((t) => String(t).trim().slice(0, 40)).filter(Boolean))];
+      fields.push('tags = ?');
+      values.push(JSON.stringify(list.slice(0, 20)));
+    }
+    if (assignedUserId !== undefined) {
+      fields.push('assigned_user_id = ?');
+      values.push(assignedUserId ? Number(assignedUserId) : null);
+    }
+    if (contactNotes !== undefined) {
+      fields.push('contact_notes = ?');
+      values.push(contactNotes ? String(contactNotes).slice(0, 4000) : null);
+    }
+    if (contactName !== undefined && String(contactName).trim()) {
+      fields.push('contact_name = ?');
+      values.push(String(contactName).trim().slice(0, 120));
+    }
+    values.push(chatProfileId);
+    getDatabase().prepare(`UPDATE chat_profiles SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return this.findById(chatProfileId);
+  }
+
   getByOwner(ownerPhone) {
     const db = getDatabase();
     const owner = normalizePhone(ownerPhone);

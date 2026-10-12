@@ -1,16 +1,85 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, Info, UserRound } from 'lucide-react';
 import { dataApi } from '../api/client';
 import AiAssistantPanel from './AiAssistantPanel';
-import AiToggle from './AiToggle';
+import ContactDetailsPanel from './ContactDetailsPanel';
 import ExportMenu from './ExportMenu';
 import { EmptyState, Spinner } from './ui';
+import { Drawer, NumberBadge } from './ds';
 import { formatISTTime } from '../utils/time';
 import { isContactChat, isContactAiOn } from '../utils/chat';
 
 function messageLabel(msg) {
-  if (msg.role === 'owner') return msg.source === 'web' ? 'You' : 'You';
+  if (msg.role === 'owner') return 'Team';
   if (msg.role === 'assistant') return 'AI';
   return null;
+}
+
+/** "AI Active" vs "AI Paused — Human Handling", with the switch to hand over / back. */
+function AiBanner({ chat, onToggle }) {
+  const [busy, setBusy] = useState(false);
+  const aiOn = isContactAiOn(chat);
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      const data = await dataApi.setChatAssistant(chat.id, !aiOn);
+      onToggle(data.chat);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="status"
+      className={`flex items-center gap-2 border-b px-4 py-2 text-xs ${
+        aiOn ? 'border-ai-ring bg-ai-soft text-ai' : 'border-amber-200 bg-amber-50 text-amber-900'
+      }`}
+    >
+      {aiOn ? <Bot size={14} /> : <UserRound size={14} />}
+      <span className="flex-1 font-medium">
+        {aiOn ? 'AI Active — replies automatically' : 'AI Paused — Human Handling'}
+      </span>
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={busy}
+        className="rounded-lg bg-white/80 px-2.5 py-1 font-semibold text-ink shadow-sm ring-1 ring-black/5 hover:bg-white disabled:opacity-50"
+      >
+        {busy ? '…' : aiOn ? 'Take over' : 'Resume AI'}
+      </button>
+    </div>
+  );
+}
+
+function ChatSidePanel({ chat, messages, selectedMessage, onChatUpdate }) {
+  const [tab, setTab] = useState('contact');
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex gap-1 border-b border-border p-2" role="tablist">
+        {[['contact', 'Contact'], ['ai', 'AI insights']].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium ${tab === id ? 'bg-primary-soft text-primary' : 'text-ink-muted hover:bg-slate-50'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {tab === 'contact' ? (
+          <ContactDetailsPanel chat={chat} onChatUpdate={onChatUpdate} />
+        ) : (
+          <AiAssistantPanel chat={chat} messages={messages} selectedMessage={selectedMessage} embedded />
+        )}
+      </div>
+    </div>
+  );
 }
 
 function bubbleClass(msg) {
@@ -47,6 +116,7 @@ export default function ChatPanel({ chatId, onChatUpdate, onBack, highlightMessa
   const [sendError, setSendError] = useState('');
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [flashMessageId, setFlashMessageId] = useState(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const threadRef = useRef(null);
   const lastIdRef = useRef(0);
   const stickToBottomRef = useRef(true);
@@ -203,22 +273,24 @@ export default function ChatPanel({ chatId, onChatUpdate, onBack, highlightMessa
         <div className="wa-chat-avatar">{avatarInitial(chat?.contactName)}</div>
         <div className="wa-chat-header-text">
           <h2 className="wa-chat-title">{chat?.contactName || 'Chat'}</h2>
-          <p className="wa-chat-subtitle">
-            {connected ? 'online' : 'WhatsApp offline'}
-            {isContactAiOn(chat) && (
-              <span className="wa-ai-dot wa-ai-dot-inline" title="AI on" aria-label="AI on" />
-            )}
+          <p className="wa-chat-subtitle flex items-center gap-1.5">
+            <NumberBadge name={chat?.botName} phone={chat?.botPhone} />
+            <span>{connected ? 'connected' : 'number offline'}</span>
           </p>
         </div>
+        <button
+          type="button"
+          className="rounded-lg p-2 text-ink-muted hover:bg-slate-100 hover:text-ink xl:hidden"
+          onClick={() => setDetailsOpen(true)}
+          aria-label="Contact details"
+          title="Contact details"
+        >
+          <Info size={18} />
+        </button>
         <ExportMenu onExport={handleExport} compact label="Export this chat" />
-        {isContactChat(chat) && (
-          <AiToggle
-            chatId={chat.id}
-            active={Boolean(chat.assistantActive || chat.aiOn)}
-            onChange={handleChatUpdate}
-          />
-        )}
       </header>
+
+      {isContactChat(chat) && <AiBanner chat={chat} onToggle={handleChatUpdate} />}
 
       <div className="wa-thread-wrap">
         {loading && !messages.length ? (
@@ -272,7 +344,7 @@ export default function ChatPanel({ chatId, onChatUpdate, onBack, highlightMessa
         <div className="wa-composer-row">
           <textarea
             rows={1}
-            placeholder={connected ? 'Type a message' : 'Connect WhatsApp to send'}
+            placeholder={connected ? 'Type a reply' : 'This number is offline — replies can’t be sent'}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -296,7 +368,12 @@ export default function ChatPanel({ chatId, onChatUpdate, onBack, highlightMessa
         </div>
       </form>
       </div>
-      <AiAssistantPanel chat={chat} messages={messages} selectedMessage={selectedMessage} />
+      <aside className="hidden w-80 shrink-0 flex-col border-l border-border bg-surface xl:flex">
+        {chat && <ChatSidePanel chat={chat} messages={messages} selectedMessage={selectedMessage} onChatUpdate={handleChatUpdate} />}
+      </aside>
+      <Drawer open={detailsOpen} onClose={() => setDetailsOpen(false)} title={chat?.contactName || 'Contact'} width="max-w-sm">
+        {chat && <div className="-mx-5 -my-4 flex h-full flex-col"><ChatSidePanel chat={chat} messages={messages} selectedMessage={selectedMessage} onChatUpdate={handleChatUpdate} /></div>}
+      </Drawer>
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { authApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { SectionHeader, Button, Card, Input } from '../components/ds';
+import { SectionHeader, Button, Card, Input, Badge } from '../components/ds';
+
+const ROLE_LABEL = { owner: 'Pulse Owner', team_admin: 'Team Admin', team_user: 'Team User' };
 
 function memberInitials(name) {
   return (name || '?')
@@ -14,7 +16,7 @@ function memberInitials(name) {
 }
 
 export default function Account() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, team } = useAuth();
 
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
@@ -53,7 +55,7 @@ export default function Account() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <SectionHeader title="Profile" subtitle="Manage your password." />
+      <SectionHeader title="Settings" subtitle="Your profile and password." />
 
       {(message || error) && (
         <div
@@ -79,6 +81,10 @@ export default function Account() {
             <div>
               <p className="text-lg font-semibold text-ink">{user?.name}</p>
               <p className="text-sm text-ink-muted">{user?.email}</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <Badge tone="primary">{ROLE_LABEL[user?.role] || user?.role}</Badge>
+                {user?.role !== 'owner' && team && <Badge tone="neutral">{team.name}</Badge>}
+              </div>
             </div>
           </div>
         </Card>
@@ -88,7 +94,7 @@ export default function Account() {
             Change password
           </p>
           <p className="mb-4 text-sm text-ink-muted">
-            Enter your current password, then choose a new one (min 6 characters).
+            Enter your current password, then choose a new one (min 8 characters).
           </p>
           <form className="space-y-4" onSubmit={handlePasswordChange}>
             <Input
@@ -107,7 +113,7 @@ export default function Account() {
               value={passwordForm.newPassword}
               onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
               autoComplete="new-password"
-              minLength={6}
+              minLength={8}
               required
             />
             <Input
@@ -118,7 +124,7 @@ export default function Account() {
                 setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))
               }
               autoComplete="new-password"
-              minLength={6}
+              minLength={8}
               required
             />
             <Button type="submit" variant="primary" disabled={passwordBusy}>

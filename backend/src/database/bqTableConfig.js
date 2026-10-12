@@ -9,8 +9,8 @@ const TABLE_CONFIG = {
   },
   teams: {
     idField: 'id',
-    timestamps: ['created_at'],
-    fields: ['id', 'name', 'owner_user_id', 'created_at'],
+    timestamps: ['created_at', 'updated_at'],
+    fields: ['id', 'name', 'description', 'owner_user_id', 'is_active', 'created_at', 'updated_at'],
   },
   dashboard_users: {
     idField: 'id',
@@ -33,9 +33,13 @@ const TABLE_CONFIG = {
     idField: 'id',
     timestamps: ['created_at', 'updated_at'],
     fields: [
-      'id', 'dashboard_user_id', 'name', 'whatsapp_phone', 'status', 'session_client_id',
-      'assistant_name', 'assistant_self_enabled', 'assistant_contacts_enabled', 'guru_mode',
-      'last_error', 'last_whatsapp_phone', 'reply_delay_seconds', 'created_at', 'updated_at',
+      'id', 'team_id', 'dashboard_user_id', 'name', 'description', 'whatsapp_phone', 'status',
+      'is_active', 'ai_status', 'default_ai_on', 'session_client_id', 'gallabox_api_key_enc',
+      'gallabox_api_secret_enc', 'gallabox_channel_id', 'gallabox_account_id', 'webhook_secret_enc',
+      'system_prompt', 'knowledge_resource_ids', 'assistant_name', 'assistant_self_enabled',
+      'assistant_contacts_enabled', 'guru_mode', 'last_error', 'last_whatsapp_phone',
+      'reply_delay_seconds', 'batch_delay_seconds', 'context_window_minutes', 'test_mode_enabled',
+      'test_numbers', 'last_inbound_at', 'created_at', 'updated_at',
     ],
   },
   chat_profiles: {
@@ -45,7 +49,8 @@ const TABLE_CONFIG = {
       'id', 'chat_id', 'owner_phone', 'contact_name', 'contact_phone', 'contact_role',
       'contact_responsibilities', 'contact_relations', 'chat_type', 'assistant_active',
       'assistant_pinned_on', 'paused_until', 'conversation_mode', 'context_topic', 'routing_slots',
-      'conversation_ended_at', 'created_at', 'updated_at',
+      'conversation_ended_at', 'tags', 'assigned_user_id', 'contact_notes', 'import_source',
+      'created_at', 'updated_at',
     ],
   },
   messages: {
@@ -60,12 +65,31 @@ const TABLE_CONFIG = {
   },
   action_items: {
     idField: 'id',
-    timestamps: ['triggered_at', 'completed_at', 'created_at'],
+    timestamps: ['triggered_at', 'completed_at', 'created_at', 'updated_at'],
     fields: [
       'id', 'bot_account_id', 'chat_profile_id', 'assigned_dashboard_user_id', 'source', 'title',
       'description', 'status', 'category', 'priority', 'dedupe_key', 'trigger_message_id',
-      'triggered_at', 'completed_at', 'created_at',
+      'due_date', 'notes', 'resolution', 'created_by_user_id',
+      'triggered_at', 'completed_at', 'created_at', 'updated_at',
     ],
+  },
+  bot_prompt_versions: {
+    idField: 'id',
+    timestamps: ['created_at'],
+    fields: ['id', 'bot_account_id', 'content', 'note', 'created_by', 'created_at'],
+  },
+  knowledge_resources: {
+    idField: 'id',
+    timestamps: ['created_at', 'updated_at', 'deleted_at'],
+    fields: [
+      'id', 'team_id', 'title', 'kind', 'content', 'source_path', 'filename', 'content_hash',
+      'created_by', 'deleted_at', 'created_at', 'updated_at',
+    ],
+  },
+  audit_log: {
+    idField: 'id',
+    timestamps: ['created_at'],
+    fields: ['id', 'actor_user_id', 'team_id', 'action', 'target_type', 'target_id', 'meta', 'created_at'],
   },
   token_usage: {
     idField: 'id',
@@ -90,6 +114,7 @@ const TABLE_CONFIG = {
 const HYDRATE_ORDER = [
   'users', 'teams', 'dashboard_users', 'team_settings', 'bot_accounts', 'chat_profiles',
   'messages', 'conversation_summaries', 'action_items', 'token_usage', 'notes', 'reminders',
+  'bot_prompt_versions', 'knowledge_resources', 'audit_log',
 ];
 
 const BQ_SYNC_TABLES = HYDRATE_ORDER.map((table) => ({ table }));

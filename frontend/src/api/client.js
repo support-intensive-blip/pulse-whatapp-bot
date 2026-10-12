@@ -8,14 +8,32 @@ export class ApiError extends Error {
   }
 }
 
+// Team + number the dashboard is working on. Set by AuthContext; sent on every
+// request so the backend scopes data (owner: x-team-id picks the team;
+// x-bot-id narrows to one WhatsApp number, absent = "All Numbers").
+const scope = { teamId: null, botId: null };
+
+export function setApiScope({ teamId, botId } = {}) {
+  if (teamId !== undefined) scope.teamId = teamId;
+  if (botId !== undefined) scope.botId = botId;
+}
+
 function getToken() {
   return localStorage.getItem('dashboard_token');
+}
+
+function scopeHeaders({ allNumbers = false } = {}) {
+  const headers = {};
+  if (scope.teamId) headers['x-team-id'] = String(scope.teamId);
+  if (scope.botId && !allNumbers) headers['x-bot-id'] = String(scope.botId);
+  return headers;
 }
 
 export async function api(path, options = {}) {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...scopeHeaders({ allNumbers: options.allNumbers }),
     ...(options.headers || {}),
   };
 
@@ -30,7 +48,7 @@ export async function api(path, options = {}) {
 
   try {
     const res = await fetch(`${API_BASE}${path}`, {
-      ...options,
+      method: options.method,
       headers,
       signal: controller.signal,
       body: options.body ? (isFormData ? options.body : JSON.stringify(options.body)) : undefined,
@@ -51,14 +69,23 @@ export async function api(path, options = {}) {
   }
 }
 
-async function downloadExport(path, filename) {
+function qs(params = {}) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '' && value !== 'all') search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : '';
+}
+
+async function download(path, filename) {
   const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { ...scopeHeaders(), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(data.error || 'Export failed', res.status);
+    throw new ApiError(data.error || 'Download failed', res.status);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -71,16 +98,9 @@ async function downloadExport(path, filename) {
 
 export const authApi = {
   login: (email, password) => api('/auth/login', { method: 'POST', body: { email, password } }),
-  me: () => api('/auth/me'),
+  me: () => api('/auth/me', { allNumbers: true }),
   changePassword: (currentPassword, newPassword) =>
     api('/auth/password', { method: 'PATCH', body: { currentPassword, newPassword } }),
-};
-
-export const botApi = {
-  status: () => api('/bot'),
-  start: () => api('/bot/start', { method: 'POST', timeoutMs: 30000 }),
-  stop: () => api('/bot/stop', { method: 'POST', timeoutMs: 30000 }),
-  updateSettings: (settings) => api('/bot/settings', { method: 'PATCH', body: settings }),
 };
 
 export const configApi = {
@@ -92,66 +112,44 @@ export const configApi = {
 };
 
 export const dataApi = {
-  stats: (fresh = false) => api(fresh ? `/stats?fresh=${Date.now()}` : '/stats'),
-  conversations: (search = '', assistant = 'all') => {
-    const qs = new URLSearchParams();
-    if (search) qs.set('search', search);
-    if (assistant && assistant !== 'all') qs.set('assistant', assistant);
-    const suffix = qs.toString();
-    return api(`/conversations${suffix ? `?${suffix}` : ''}`, { timeoutMs: 45000 });
-  },
+  stats: (fresh = false) => api(`/stats${fresh ? `?fresh=${Date.now()}` : ''}`),
+  conversations: (search = '', assistant = 'all', extra = {}) =>
+    api(`/conversations${qs({ search, assistant, ...extra })}`, { timeoutMs: 45000 }),
   setChatAssistant: (chatId, active) =>
     api(`/conversations/${chatId}/assistant`, { method: 'PATCH', body: { active } }),
+  updateContact: (chatId, body) => api(`/conversations/${chatId}/contact`, { method: 'PATCH', body }),
   contactChats: (contactKey, search = '') =>
-    api(
-      `/conversations/contact/${encodeURIComponent(contactKey)}/chats${
-        search ? `?search=${encodeURIComponent(search)}` : ''
-      }`
-    ),
-  syncConversations: (search = '') =>
-    api(`/conversations/sync${search ? `?search=${encodeURIComponent(search)}` : ''}`, {
-      method: 'POST',
-    }),
-  messages: (chatId, { limit = 200, since = null } = {}) => {
-    const qs = new URLSearchParams({ limit: String(limit) });
-    if (since) qs.set('since', String(since));
-    return api(`/conversations/${chatId}/messages?${qs}`);
-  },
+    api(`/conversations/contact/${encodeURIComponent(contactKey)}/chats${qs({ search })}`),
+  syncConversations: (search = '') => api(`/conversations/sync${qs({ search })}`, { method: 'POST' }),
+  messages: (chatId, { limit = 200, since = null } = {}) =>
+    api(`/conversations/${chatId}/messages${qs({ limit, since })}`),
   sendMessage: (chatId, content) =>
-    api(`/conversations/${chatId}/messages`, {
-      method: 'POST',
-      body: { content },
-      timeoutMs: 45000,
-    }),
-  summarizeChat: (chatId) =>
-    api(`/conversations/${chatId}/summarize`, { method: 'POST', timeoutMs: 90000 }),
+    api(`/conversations/${chatId}/messages`, { method: 'POST', body: { content }, timeoutMs: 45000 }),
+  summarizeChat: (chatId) => api(`/conversations/${chatId}/summarize`, { method: 'POST', timeoutMs: 90000 }),
   sendSummaryToWhatsApp: (chatId) =>
     api(`/conversations/${chatId}/summarize-to-whatsapp`, { method: 'POST', timeoutMs: 120000 }),
-  escalateChat: (chatId) =>
-    api(`/conversations/${chatId}/escalate`, { method: 'POST', timeoutMs: 30000 }),
+  escalateChat: (chatId, body = {}) =>
+    api(`/conversations/${chatId}/escalate`, { method: 'POST', body, timeoutMs: 30000 }),
   exportChats: (ids, format = 'json', filename, range = {}) => {
-    const qs = new URLSearchParams({ format });
-    if (ids?.length) qs.set('ids', ids.join(','));
-    if (range?.from) qs.set('from', range.from);
-    if (range?.to) qs.set('to', range.to);
     const base =
       filename ||
       (ids?.length === 1 ? `chat-${ids[0]}` : ids?.length ? 'chats-selected' : 'chats-all');
-    return downloadExport(`/conversations/export?${qs}`, `${base}.${format}`);
+    return download(
+      `/conversations/export${qs({ format, ids: ids?.length ? ids.join(',') : null, from: range?.from, to: range?.to })}`,
+      `${base}.${format}`
+    );
   },
-  actionItems: ({ status, coach, student, category } = {}) => {
-    const qs = new URLSearchParams();
-    if (status) qs.set('status', status);
-    if (coach) qs.set('coach', coach);
-    if (student) qs.set('student', student);
-    if (category) qs.set('category', category);
-    return api(`/action-items${qs.toString() ? `?${qs}` : ''}`);
-  },
-  updateActionItem: (id, status) => api(`/action-items/${id}`, { method: 'PATCH', body: { status } }),
+  actionItems: (params = {}) => api(`/action-items${qs(params)}`),
+  updateActionItem: (id, statusOrPatch) =>
+    api(`/action-items/${id}`, {
+      method: 'PATCH',
+      body: typeof statusOrPatch === 'string' ? { status: statusOrPatch } : statusOrPatch,
+    }),
   importContact: (body) => api('/conversations/import', { method: 'POST', body }),
-  importContactCsv: (file) => {
+  importContactCsv: (file, botId) => {
     const fd = new FormData();
     fd.append('file', file);
+    if (botId) fd.append('botId', String(botId));
     return api('/conversations/import-csv', { method: 'POST', body: fd });
   },
   setAssistantForGroup: ({ contactNames, active }) =>
@@ -164,6 +162,95 @@ export const dataApi = {
     fd.append('defaultActive', defaultActive ? 'true' : 'false');
     return api('/conversations/assistant/bulk-csv', { method: 'POST', body: fd });
   },
+};
+
+export const actionsApi = {
+  list: (params = {}) => api(`/action-items${qs(params)}`),
+  get: (id) => api(`/action-items/${id}`, { allNumbers: true }),
+  create: (body) => api('/action-items', { method: 'POST', body }),
+  update: (id, body) => api(`/action-items/${id}`, { method: 'PATCH', body, allNumbers: true }),
+};
+
+export const teamsApi = {
+  overview: () => api('/owner/overview', { allNumbers: true }),
+  list: () => api('/teams', { allNumbers: true }),
+  create: (body) => api('/teams', { method: 'POST', body, allNumbers: true }),
+  update: (id, body) => api(`/teams/${id}`, { method: 'PATCH', body, allNumbers: true }),
+  auditLog: (teamId) => api(`/audit-log${qs({ teamId })}`, { allNumbers: true }),
+};
+
+export const usersApi = {
+  members: () => api('/team/members', { allNumbers: true }),
+  list: () => api('/users', { allNumbers: true }),
+  create: (body) => api('/users', { method: 'POST', body, allNumbers: true }),
+  update: (id, body) => api(`/users/${id}`, { method: 'PATCH', body, allNumbers: true }),
+  resetPassword: (id, password) =>
+    api(`/users/${id}/reset-password`, { method: 'POST', body: { password }, allNumbers: true }),
+};
+
+// Bot management always works on the whole team, whatever number is selected.
+const botOpts = (extra = {}) => ({ allNumbers: true, ...extra });
+export const botsApi = {
+  list: () => api('/bots', botOpts()),
+  get: (id) => api(`/bots/${id}`, botOpts()),
+  create: (body) => api('/bots', botOpts({ method: 'POST', body, timeoutMs: 30000 })),
+  update: (id, body) => api(`/bots/${id}`, botOpts({ method: 'PATCH', body, timeoutMs: 30000 })),
+  updateCredentials: (id, body) => api(`/bots/${id}/credentials`, botOpts({ method: 'PUT', body, timeoutMs: 30000 })),
+  testConnection: (body) => api('/bots/test-connection', botOpts({ method: 'POST', body, timeoutMs: 20000 })),
+  testSaved: (id) => api(`/bots/${id}/test-connection`, botOpts({ method: 'POST', timeoutMs: 20000 })),
+  restart: (id) => api(`/bots/${id}/restart`, botOpts({ method: 'POST', timeoutMs: 30000 })),
+  prompt: (id) => api(`/bots/${id}/prompt`, botOpts()),
+  publishPrompt: (id, content, note) => api(`/bots/${id}/prompt`, botOpts({ method: 'PUT', body: { content, note } })),
+  promptVersion: (id, versionId) => api(`/bots/${id}/prompt/versions/${versionId}`, botOpts()),
+  restorePrompt: (id, versionId) =>
+    api(`/bots/${id}/prompt/versions/${versionId}/restore`, botOpts({ method: 'POST' })),
+  setKnowledge: (id, resourceIds) => api(`/bots/${id}/knowledge`, botOpts({ method: 'PUT', body: { resourceIds } })),
+  knowledgeStatus: (id) => api(`/bots/${id}/knowledge/status`, botOpts()),
+  reindex: (id) => api(`/bots/${id}/knowledge/reindex`, botOpts({ method: 'POST' })),
+  playgroundHistory: (id, sessionId) => api(`/bots/${id}/playground${qs({ sessionId })}`, botOpts()),
+  playground: (id, body) => api(`/bots/${id}/playground`, botOpts({ method: 'POST', body, timeoutMs: 90000 })),
+  activity: (id) => api(`/bots/${id}/activity`, botOpts()),
+};
+
+export const knowledgeApi = {
+  list: () => api('/knowledge', { allNumbers: true }),
+  get: (id) => api(`/knowledge/${id}`, { allNumbers: true }),
+  createText: (body) => api('/knowledge', { method: 'POST', body, allNumbers: true }),
+  upload: (file, { title, botIds } = {}) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (title) fd.append('title', title);
+    if (botIds?.length) fd.append('botIds', botIds.join(','));
+    return api('/knowledge', { method: 'POST', body: fd, allNumbers: true, timeoutMs: 60000 });
+  },
+  update: (id, body) => api(`/knowledge/${id}`, { method: 'PATCH', body, allNumbers: true }),
+  remove: (id) => api(`/knowledge/${id}`, { method: 'DELETE', allNumbers: true }),
+};
+
+export const contactsApi = {
+  list: (params = {}) => api(`/contacts${qs(params)}`, { timeoutMs: 45000 }),
+  downloadTemplate: () => download('/contacts/import/template', 'pulse-contacts-template.csv'),
+  exportCsv: (params = {}) => download(`/contacts/export${qs(params)}`, 'pulse-contacts.csv'),
+  importPreview: ({ file, botId, mapping }) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('botId', String(botId));
+    if (mapping) fd.append('mapping', JSON.stringify(mapping));
+    return api('/contacts/import/preview', { method: 'POST', body: fd, allNumbers: true, timeoutMs: 60000 });
+  },
+  importCommit: ({ file, botId, mapping, enableAi, updateExisting }) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('botId', String(botId));
+    if (mapping) fd.append('mapping', JSON.stringify(mapping));
+    if (enableAi !== undefined) fd.append('enableAi', String(enableAi));
+    if (updateExisting !== undefined) fd.append('updateExisting', String(updateExisting));
+    return api('/contacts/import/commit', { method: 'POST', body: fd, allNumbers: true, timeoutMs: 120000 });
+  },
+};
+
+export const analyticsApi = {
+  get: (days = 14) => api(`/analytics${qs({ days })}`),
 };
 
 export const adminApi = {

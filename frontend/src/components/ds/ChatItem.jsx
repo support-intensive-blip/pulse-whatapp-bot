@@ -15,6 +15,8 @@ export function ChatItem({
   showCheckbox = false,
   checked = false,
   onCheckboxChange,
+  badge = null,
+  unreadHint = false,
   className = '',
   ...props
 }) {
@@ -54,7 +56,7 @@ export function ChatItem({
           <div className="flex shrink-0 items-center gap-1.5">
             {aiOn && (
               <span
-                className="h-2.5 w-2.5 rounded-full bg-success shadow-[0_0_0_2px_#fff]"
+                className="h-2.5 w-2.5 rounded-full bg-ai shadow-[0_0_0_2px_#fff]"
                 title="AI active"
                 aria-label="AI active"
               />
@@ -64,7 +66,11 @@ export function ChatItem({
             )}
           </div>
         </div>
-        <p className="mt-0.5 truncate text-xs text-ink-muted">{preview}</p>
+        <div className="mt-0.5 flex items-center gap-1.5">
+          {badge}
+          <p className={`min-w-0 flex-1 truncate text-xs ${unreadHint ? 'font-medium text-ink' : 'text-ink-muted'}`}>{preview}</p>
+          {unreadHint && <span className="h-2 w-2 shrink-0 rounded-full bg-primary" title="Awaiting reply" aria-label="Awaiting reply" />}
+        </div>
       </div>
     </div>
   );

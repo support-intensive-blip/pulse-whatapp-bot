@@ -1,4 +1,81 @@
+// bot_accounts = one Gallabox WhatsApp number (an independent AI bot) owned by a
+// team. Shared with the rebuild migration in platformMigrations.js, which drops the
+// old one-bot-per-user UNIQUE constraint.
+function botAccountsTableSql(tableName) {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id INTEGER,
+  dashboard_user_id INTEGER,
+  name TEXT NOT NULL DEFAULT 'My WhatsApp Bot',
+  description TEXT,
+  whatsapp_phone TEXT,
+  last_whatsapp_phone TEXT,
+  status TEXT NOT NULL DEFAULT 'disconnected',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  ai_status TEXT NOT NULL DEFAULT 'active',
+  default_ai_on INTEGER NOT NULL DEFAULT 1,
+  session_client_id TEXT NOT NULL,
+  gallabox_api_key_enc TEXT,
+  gallabox_api_secret_enc TEXT,
+  gallabox_channel_id TEXT,
+  gallabox_account_id TEXT,
+  webhook_secret_enc TEXT,
+  system_prompt TEXT,
+  knowledge_resource_ids TEXT NOT NULL DEFAULT '[]',
+  assistant_name TEXT DEFAULT 'JahNavi',
+  assistant_persona TEXT,
+  assistant_role_when_asked TEXT,
+  assistant_self_enabled INTEGER NOT NULL DEFAULT 1,
+  assistant_contacts_enabled INTEGER NOT NULL DEFAULT 1,
+  guru_mode INTEGER NOT NULL DEFAULT 0,
+  openai_model_fast TEXT,
+  openai_model_smart TEXT,
+  chat_model_tier TEXT DEFAULT 'fast',
+  knowledge_base_path TEXT,
+  prompt_config TEXT,
+  reply_delay_seconds INTEGER NOT NULL DEFAULT 0,
+  batch_delay_seconds INTEGER NOT NULL DEFAULT 10,
+  context_window_minutes INTEGER NOT NULL DEFAULT 60,
+  test_mode_enabled INTEGER NOT NULL DEFAULT 0,
+  test_numbers TEXT NOT NULL DEFAULT '[]',
+  last_qr TEXT,
+  last_pairing_code TEXT,
+  last_error TEXT,
+  last_inbound_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
+  FOREIGN KEY (dashboard_user_id) REFERENCES dashboard_users(id) ON DELETE SET NULL
+)`;
+}
+
+// Student memory is scoped to the bot number the student wrote to (owner_phone),
+// so two bots never share what a student told one of them.
+function studentMemoryTableSql(tableName) {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_phone TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL,
+  preferences TEXT,
+  last_conversation_summary TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (owner_phone, phone)
+)`;
+}
+
 const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS teams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_user_id INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (owner_user_id) REFERENCES dashboard_users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   phone TEXT NOT NULL UNIQUE,
@@ -67,13 +144,7 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   FOREIGN KEY (chat_profile_id) REFERENCES chat_profiles(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS student_user_memory (
-  phone TEXT PRIMARY KEY NOT NULL,
-  preferences TEXT,
-  last_conversation_summary TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+${studentMemoryTableSql('student_user_memory')};
 
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
@@ -112,23 +183,7 @@ CREATE TABLE IF NOT EXISTS dashboard_users (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS bot_accounts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  dashboard_user_id INTEGER NOT NULL UNIQUE,
-  name TEXT NOT NULL DEFAULT 'My WhatsApp Bot',
-  whatsapp_phone TEXT,
-  status TEXT NOT NULL DEFAULT 'disconnected',
-  session_client_id TEXT NOT NULL,
-  assistant_name TEXT DEFAULT 'JahNavi',
-  assistant_self_enabled INTEGER NOT NULL DEFAULT 1,
-  assistant_contacts_enabled INTEGER NOT NULL DEFAULT 1,
-  guru_mode INTEGER NOT NULL DEFAULT 0,
-  last_qr TEXT,
-  last_error TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (dashboard_user_id) REFERENCES dashboard_users(id) ON DELETE CASCADE
-);
+${botAccountsTableSql('bot_accounts')};
 
 CREATE TABLE IF NOT EXISTS action_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +193,7 @@ CREATE TABLE IF NOT EXISTS action_items (
   source TEXT NOT NULL DEFAULT 'system',
   title TEXT NOT NULL,
   description TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'open',
   triggered_at TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -179,4 +234,57 @@ CREATE TABLE IF NOT EXISTS chat_profiles (
 );
 `;
 
-module.exports = { SCHEMA_SQL, MIGRATION_SQL };
+// Multi-team platform tables (applied by platformMigrations.js after the legacy migrations).
+// Nothing here is hard-deleted: BigQuery sync is append-only, so removals are soft
+// (knowledge_resources.deleted_at) and bot↔resource links live on bot_accounts.
+const PLATFORM_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS bot_prompt_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_account_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  note TEXT,
+  created_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (bot_account_id) REFERENCES bot_accounts(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES dashboard_users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_bot ON bot_prompt_versions(bot_account_id, id);
+
+CREATE TABLE IF NOT EXISTS knowledge_resources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id INTEGER,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
+  content TEXT NOT NULL DEFAULT '',
+  source_path TEXT,
+  filename TEXT,
+  content_hash TEXT,
+  created_by INTEGER,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES dashboard_users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_resources_team ON knowledge_resources(team_id);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_user_id INTEGER,
+  team_id INTEGER,
+  action TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  meta TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_team ON audit_log(team_id, id);
+`;
+
+module.exports = {
+  SCHEMA_SQL,
+  MIGRATION_SQL,
+  PLATFORM_TABLES_SQL,
+  botAccountsTableSql,
+  studentMemoryTableSql,
+};

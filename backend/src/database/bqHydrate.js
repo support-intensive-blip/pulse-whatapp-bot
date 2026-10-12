@@ -54,16 +54,28 @@ function insertRows(db, table, rows) {
   if (!rows.length) return 0;
 
   const config = getTableConfig(table);
-  const columns = config.fields;
-  const placeholders = columns.map(() => '?').join(', ');
-  const sql = `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
-  const stmt = db.prepare(sql);
+  const statements = new Map();
+
+  // Columns added after a row was written come back NULL from BigQuery; leave
+  // them out so the SQLite column default (e.g. NOT NULL DEFAULT '[]') applies.
+  function statementFor(columns) {
+    const key = columns.join(',');
+    if (!statements.has(key)) {
+      const placeholders = columns.map(() => '?').join(', ');
+      statements.set(
+        key,
+        db.prepare(`INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`)
+      );
+    }
+    return statements.get(key);
+  }
 
   let count = 0;
   const tx = db.transaction((items) => {
     for (const raw of items) {
       const row = rowToSqlite(raw, config);
-      stmt.run(...columns.map((col) => row[col] ?? null));
+      const columns = config.fields.filter((col) => row[col] !== null && row[col] !== undefined);
+      statementFor(columns).run(...columns.map((col) => row[col]));
       count += 1;
     }
   });

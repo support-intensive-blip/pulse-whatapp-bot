@@ -9,7 +9,8 @@ function parseNameList(text) {
     .filter(Boolean);
 }
 
-export default function ContactsPanel({ onDone, onHint }) {
+/** Bulk AI switch + history import. `botId` = the number history is imported into. */
+export default function ContactsPanel({ botId, onDone, onHint }) {
   const [bulkAiOn, setBulkAiOn] = useState(true);
   const [groupNames, setGroupNames] = useState('');
   const [groupBusy, setGroupBusy] = useState(false);
@@ -84,6 +85,7 @@ export default function ContactsPanel({ onDone, onHint }) {
       });
 
       const result = await dataApi.importContact({
+        botId,
         contactName: contactForm.contactName.trim(),
         contactPhone: contactForm.contactPhone.trim(),
         enableAi: contactForm.enableAi,
@@ -109,7 +111,7 @@ export default function ContactsPanel({ onDone, onHint }) {
     if (!file) return;
     setHistoryCsvBusy(true);
     try {
-      const result = await dataApi.importContactCsv(file);
+      const result = await dataApi.importContactCsv(file, botId);
       onHint?.(`Imported ${result.records} messages across ${result.contacts} contact(s).`);
       onDone?.();
     } catch (err) {

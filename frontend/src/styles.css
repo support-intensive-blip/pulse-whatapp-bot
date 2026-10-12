@@ -1374,11 +1374,12 @@ textarea:focus {
 }
 
 /* ——— WhatsApp Web layout ——— */
+/* Fills <main> exactly (Layout drops main's padding on inbox routes). */
 .wa-app {
   display: flex;
-  height: calc(100vh - 5rem);
-  margin: -2.5rem -2rem -5rem;
-  width: calc(100% + 4rem);
+  height: 100%;
+  margin: 0;
+  width: 100%;
   max-width: none;
   background: #fff;
   border: 1px solid var(--border-light);
@@ -2361,12 +2362,6 @@ textarea:focus {
 
   .main {
     padding: 1.25rem 1rem 5.5rem;
-  }
-
-  .wa-app {
-    height: calc(100vh - 5.5rem);
-    margin: -1.25rem -1rem -5.5rem;
-    width: calc(100% + 2rem);
   }
 
   .wa-sidebar-chats-hidden-mobile {

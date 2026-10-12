@@ -1,4 +1,3 @@
-const gallaboxApi = require('./gallaboxApi');
 
 // Gallabox/WhatsApp type → the media type names the chat service already
 // understands (it predates Gallabox and keys voice handling off 'audio'/'ptt').
@@ -54,9 +53,9 @@ function interactiveText(wa) {
 /**
  * Normalize a Gallabox `Message.Received` webhook payload into the shape the
  * message handler works with. Returns null for events with nothing to answer
- * (reactions, orders, unknown types).
+ * (reactions, orders, unknown types). `client` is the receiving bot's Gallabox client.
  */
-function fromGallaboxPayload(payload) {
+function fromGallaboxPayload(payload, client) {
   const wa = payload?.whatsapp;
   if (!wa || !wa.from) return null;
 
@@ -112,7 +111,7 @@ function fromGallaboxPayload(payload) {
       mimeType,
       mediaUrl,
       download: async () =>
-        mediaUrl ? gallaboxApi.downloadMedia(mediaUrl, { mimeType, filename }) : null,
+        mediaUrl ? client.downloadMedia(mediaUrl, { mimeType, filename }) : null,
     };
   }
 

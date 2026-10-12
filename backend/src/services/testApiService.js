@@ -10,6 +10,7 @@ const { applyFirewallPostReply, sanitizeUserReply } = require('../ai/replyRules'
 const { MESSAGE_ROLES, MESSAGE_SOURCES } = require('../utils/constants');
 const { normalizePhone } = require('../utils/helpers');
 const { KeyedQueue, ConcurrencyLimiter } = require('../utils/requestQueue');
+const { runWithBot } = require('../utils/botContext');
 const logger = require('../utils/logger');
 
 const TEST_CHAT_PREFIX = 'api-test';
@@ -90,12 +91,19 @@ function resolveTeam() {
   return TEST_TEAM;
 }
 
+// TEST_API_BOT_ID picks which number's prompt + KB the eval harness talks to.
 function resolvePrimaryBot() {
   const db = getDatabase();
+  const explicit = parseInt(process.env.TEST_API_BOT_ID, 10);
+  if (explicit) {
+    const bot = db.prepare('SELECT * FROM bot_accounts WHERE id = ?').get(explicit);
+    if (bot) return bot;
+  }
   return (
     db
       .prepare(
         `SELECT * FROM bot_accounts
+         WHERE is_active = 1
          ORDER BY
            CASE WHEN status = 'ready' THEN 0 ELSE 1 END,
            CASE WHEN whatsapp_phone IS NOT NULL AND whatsapp_phone != '' THEN 0 ELSE 1 END,
@@ -338,13 +346,15 @@ async function runChat(options = {}) {
 
   const isIsolated = Boolean(options.isolated || options.parallel || options.stateless);
 
-  return globalLimiter.run(async () => {
-    if (isIsolated) {
-      return runChatInner(options);
-    }
-    const queueKey = sessionQueueKey(ctx.team.id, options.sessionId || 'default');
-    return sessionQueue.run(queueKey, () => runChatInner(options));
-  });
+  return runWithBot(ctx.bot.id, () =>
+    globalLimiter.run(async () => {
+      if (isIsolated) {
+        return runChatInner(options);
+      }
+      const queueKey = sessionQueueKey(ctx.team.id, options.sessionId || 'default');
+      return sessionQueue.run(queueKey, () => runChatInner(options));
+    })
+  );
 }
 
 function resetSession(sessionId = 'default') {
