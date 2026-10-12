@@ -15,6 +15,7 @@ const {
 const { hydrateFromBigQuery } = require('./bqHydrate');
 const { wrapDatabaseForBqSync } = require('./bqSync');
 const supabaseSync = require('./supabaseSync');
+const { applySupabaseSchema } = require('./supabaseSchema');
 
 let db = null;
 let bqReady = false;
@@ -594,19 +595,48 @@ function finishPostInit(database) {
   recoverTokenUsageFromDisk(database);
 }
 
+/**
+ * Creates/extends the Supabase tables (with SUPABASE_DB_URL), then waits for the
+ * REST API to see them — PostgREST reloads its schema cache a moment after DDL.
+ */
+async function prepareSupabaseSchema(database) {
+  let applied = false;
+  try {
+    applied = await applySupabaseSchema(database);
+  } catch (error) {
+    logger.error(`Supabase schema apply failed: ${error.message}`);
+  }
+  const attempts = applied ? 10 : 1;
+  for (let i = 1; ; i += 1) {
+    try {
+      await supabaseSync.checkSupabaseSchema(database);
+      return;
+    } catch (error) {
+      if (i >= attempts || !/missing table/.test(error.message)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
 async function initializeSupabase(database) {
   supabaseSync.ensureSyncTables(database);
 
   if (isSupabasePrimary()) {
     // In-memory cache: Supabase is the only copy, load it every boot.
-    await supabaseSync.checkSupabaseSchema(database);
+    await prepareSupabaseSchema(database);
     await supabaseSync.hydrateFromSupabase(database);
   } else {
     // Disk SQLite is still a full copy: if Supabase is down or not set up yet,
     // boot anyway and let changes queue in the outbox until it's reachable.
     try {
-      await supabaseSync.checkSupabaseSchema(database);
+      await prepareSupabaseSchema(database);
     } catch (error) {
+      // A fresh disk (new container, no persistent disk) would bootstrap a new default
+      // team/admin whose ids collide with the real ones in Supabase — refuse to boot.
+      const dashboardUsers = Number(database.prepare('SELECT COUNT(*) AS c FROM dashboard_users').get()?.c || 0);
+      if (dashboardUsers === 0) {
+        throw new Error(`Supabase unavailable and local SQLite is empty; refusing to start: ${error.message}`);
+      }
       logger.error(`Supabase unavailable; changes will queue locally: ${error.message}`);
       supabaseSync.installSyncTriggers(database);
       supabaseSync.startSupabaseSyncScheduler(database);

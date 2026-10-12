@@ -67,11 +67,14 @@ services:
         sync: false
       - key: GALLABOX_WEBHOOK_SECRET
         sync: false
-      # Supabase = durable store (disk SQLite stays as the local cache).
-      # Run backend/supabase/schema.sql in Supabase, then set SUPABASE_ENABLED=true.
+      # Supabase = durable store; teams, bots, settings and chats survive every deploy.
+      # SUPABASE_DB_URL (Session pooler URI) lets the server create its own tables on boot.
+      # Without a persistent disk, also set SQLITE_ENABLED=false (Supabase-primary).
       - key: SUPABASE_ENABLED
         sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
         sync: false
