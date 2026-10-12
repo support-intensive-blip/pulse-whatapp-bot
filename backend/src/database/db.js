@@ -588,9 +588,12 @@ function finishPostInit(database) {
   const {
     recoverTokenUsageFromDisk,
     repairOwnerUserIds,
+    backfillBotAttribution,
     backfillEstimatedCostUsd,
   } = require('../services/tokenUsagePersistence');
   repairOwnerUserIds(database);
+  backfillBotAttribution(database);
+  require('../services/trafficEnvironment').backfillEnvironment(database);
   backfillEstimatedCostUsd(database);
   recoverTokenUsageFromDisk(database);
 }

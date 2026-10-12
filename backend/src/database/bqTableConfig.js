@@ -56,7 +56,7 @@ const TABLE_CONFIG = {
   messages: {
     idField: 'id',
     timestamps: ['timestamp'],
-    fields: ['id', 'user_id', 'chat_profile_id', 'role', 'content', 'source', 'wa_message_id', 'kb_meta', 'timestamp'],
+    fields: ['id', 'user_id', 'chat_profile_id', 'role', 'content', 'source', 'wa_message_id', 'kb_meta', 'environment', 'timestamp'],
   },
   conversation_summaries: {
     idField: 'id',
@@ -95,7 +95,7 @@ const TABLE_CONFIG = {
     idField: 'id',
     timestamps: ['created_at'],
     fields: [
-      'id', 'chat_profile_id', 'owner_user_id', 'category', 'model', 'prompt_tokens',
+      'id', 'chat_profile_id', 'owner_user_id', 'bot_account_id', 'team_id', 'environment', 'category', 'model', 'prompt_tokens',
       'completion_tokens', 'total_tokens', 'estimated_cost_usd', 'created_at',
     ],
   },

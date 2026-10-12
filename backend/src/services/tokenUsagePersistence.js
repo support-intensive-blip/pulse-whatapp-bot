@@ -82,8 +82,8 @@ function recoverTokenUsageFromDisk(db) {
   let skipped = 0;
   const insert = db.prepare(
     `INSERT INTO token_usage
-     (chat_profile_id, owner_user_id, category, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (chat_profile_id, owner_user_id, bot_account_id, team_id, environment, category, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   const { flushSyncToBigQuery } = require('../database/bqSync');
@@ -107,6 +107,9 @@ function recoverTokenUsageFromDisk(db) {
       result = insert.run(
         chatProfileId,
         ownerUserId,
+        record.botAccountId ?? null,
+        record.teamId ?? null,
+        record.environment ?? null,
         record.category,
         record.model || '',
         record.promptTokens || 0,
@@ -167,6 +170,44 @@ function repairOwnerUserIds(db) {
   return updated;
 }
 
+/** Fills token_usage.bot_account_id / team_id on rows recorded before they existed. */
+function backfillBotAttribution(db) {
+  const { normalizePhoneDigits } = require('../utils/helpers');
+  const rows = db
+    .prepare(
+      `SELECT tu.id, cp.owner_phone
+       FROM token_usage tu
+       JOIN chat_profiles cp ON cp.id = tu.chat_profile_id
+       WHERE tu.bot_account_id IS NULL`
+    )
+    .all();
+  if (!rows.length) return 0;
+
+  const botsByPhone = new Map();
+  for (const bot of db
+    .prepare('SELECT id, team_id, whatsapp_phone, last_whatsapp_phone FROM bot_accounts ORDER BY id DESC')
+    .all()) {
+    for (const phone of [bot.last_whatsapp_phone, bot.whatsapp_phone]) {
+      const digits = normalizePhoneDigits(phone);
+      if (digits) botsByPhone.set(digits, bot);
+    }
+  }
+
+  const update = db.prepare('UPDATE token_usage SET bot_account_id = ?, team_id = ? WHERE id = ?');
+  let updated = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      const bot = botsByPhone.get(normalizePhoneDigits(row.owner_phone));
+      if (bot) updated += update.run(bot.id, bot.team_id, row.id).changes;
+    }
+  })();
+
+  if (updated > 0) {
+    logger.info(`Backfilled bot/team on ${updated} token usage row(s)`);
+  }
+  return updated;
+}
+
 function backfillEstimatedCostUsd(db) {
   const { estimateCostUsd } = require('../config/modelPricing');
   const pending = Number(
@@ -217,5 +258,6 @@ module.exports = {
   appendTokenUsageLog,
   recoverTokenUsageFromDisk,
   repairOwnerUserIds,
+  backfillBotAttribution,
   backfillEstimatedCostUsd,
 };

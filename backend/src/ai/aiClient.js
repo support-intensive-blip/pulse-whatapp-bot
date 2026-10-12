@@ -21,6 +21,7 @@ class AiClient {
       tokenUsageService.record({
         chatProfileId: usageContext.chatProfileId ?? null,
         ownerUserId: usageContext.ownerUserId ?? null,
+        botAccountId: usageContext.botAccountId ?? null,
         category: usageContext.category,
         model,
         promptTokens: usage?.prompt_tokens || 0,

@@ -2,7 +2,8 @@ const { getDatabase } = require('../database/db');
 const logger = require('../utils/logger');
 const { estimateCostUsd } = require('../config/modelPricing');
 const { TOKEN_CATEGORIES, CATEGORY_LABELS } = require('../config/tokenCategories');
-const { resolveOwnerScopeIds } = require('../utils/helpers');
+const { resolveOwnerScopeIds, normalizePhoneDigits } = require('../utils/helpers');
+const { environmentForProfile } = require('./trafficEnvironment');
 
 function emptyStats() {
   return {
@@ -31,9 +32,37 @@ class TokenUsageService {
     }
   }
 
+  /**
+   * The bot (and its current team) a usage row belongs to: explicit botAccountId,
+   * else the bot whose number owns the chat profile.
+   */
+  resolveBot(db, { botAccountId = null, chatProfileId = null } = {}) {
+    try {
+      if (botAccountId) {
+        const bot = db.prepare('SELECT id, team_id FROM bot_accounts WHERE id = ?').get(botAccountId);
+        if (bot) return bot;
+      }
+      if (chatProfileId == null) return null;
+      const profile = db.prepare('SELECT owner_phone FROM chat_profiles WHERE id = ?').get(chatProfileId);
+      const phone = normalizePhoneDigits(profile?.owner_phone);
+      if (!phone) return null;
+      const bots = db
+        .prepare('SELECT id, team_id, whatsapp_phone, last_whatsapp_phone FROM bot_accounts ORDER BY id')
+        .all();
+      return (
+        bots.find((bot) => normalizePhoneDigits(bot.whatsapp_phone) === phone) ||
+        bots.find((bot) => normalizePhoneDigits(bot.last_whatsapp_phone) === phone) ||
+        null
+      );
+    } catch {
+      return null;
+    }
+  }
+
   record({
     chatProfileId = null,
     ownerUserId = null,
+    botAccountId = null,
     category,
     model = null,
     promptTokens = 0,
@@ -62,17 +91,25 @@ class TokenUsageService {
       safeOwnerUserId = null;
     }
 
+    const bot = this.resolveBot(db, { botAccountId, chatProfileId: safeChatProfileId });
+    const resolvedBotId = bot?.id ?? null;
+    const resolvedTeamId = bot?.team_id ?? null;
+    const environment = environmentForProfile(db, safeChatProfileId);
+
     let insertId = null;
     try {
       const result = db
         .prepare(
           `INSERT INTO token_usage
-           (chat_profile_id, owner_user_id, category, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (chat_profile_id, owner_user_id, bot_account_id, team_id, environment, category, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           safeChatProfileId,
           safeOwnerUserId,
+          resolvedBotId,
+          resolvedTeamId,
+          environment,
           category,
           model,
           prompt,
@@ -90,6 +127,9 @@ class TokenUsageService {
       id: insertId,
       chatProfileId: safeChatProfileId,
       ownerUserId: safeOwnerUserId,
+      botAccountId: resolvedBotId,
+      teamId: resolvedTeamId,
+      environment,
       category,
       model,
       promptTokens: prompt,
@@ -186,6 +226,90 @@ class TokenUsageService {
         estimatedSavingsUsd,
         avgChatCostUsd,
       },
+    };
+  }
+
+  /**
+   * Input/output token usage report.
+   *   teamIds: null = every team (owner), else only rows recorded for those teams
+   *   botId:   narrow to one bot; days: rolling window (null = all time)
+   *   environment: 'live' | 'test' | null (both); byEnvironment always splits the two
+   * Dates are grouped in IST, the timezone the dashboard shows.
+   */
+  getUsageReport({ teamIds = null, botId = null, days = null, environment = null } = {}) {
+    const db = getDatabase();
+    const conditions = [];
+    const params = [];
+    if (Array.isArray(teamIds)) {
+      if (!teamIds.length) conditions.push('0');
+      else {
+        conditions.push(`tu.team_id IN (${teamIds.map(() => '?').join(',')})`);
+        params.push(...teamIds);
+      }
+    }
+    if (botId) {
+      conditions.push('tu.bot_account_id = ?');
+      params.push(botId);
+    }
+    if (days) {
+      conditions.push("datetime(tu.created_at) >= datetime('now', ?)");
+      params.push(`-${Number(days)} days`);
+    }
+    const scopeConditions = [...conditions];
+    const scopeParams = [...params];
+    if (environment) {
+      conditions.push("COALESCE(tu.environment, 'live') = ?");
+      params.push(environment);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const sums = `
+      COALESCE(SUM(tu.prompt_tokens), 0) AS input_tokens,
+      COALESCE(SUM(tu.completion_tokens), 0) AS output_tokens,
+      COALESCE(SUM(tu.total_tokens), 0) AS total_tokens,
+      COALESCE(SUM(tu.estimated_cost_usd), 0) AS estimated_cost_usd,
+      COUNT(*) AS request_count`;
+    const from = `FROM token_usage tu
+      LEFT JOIN bot_accounts b ON b.id = tu.bot_account_id
+      LEFT JOIN teams t ON t.id = tu.team_id`;
+    const run = (select, groupBy, orderBy = 'total_tokens DESC') =>
+      db.prepare(`SELECT ${select}${sums} ${from} ${where} ${groupBy ? `GROUP BY ${groupBy}` : ''} ORDER BY ${orderBy}`).all(...params);
+
+    const totals = db.prepare(`SELECT${sums} ${from} ${where}`).get(...params);
+    // Live vs test for the same scope, regardless of the environment filter.
+    const scopeWhere = scopeConditions.length ? `WHERE ${scopeConditions.join(' AND ')}` : '';
+    const split = db
+      .prepare(
+        `SELECT COALESCE(tu.environment, 'live') AS environment,${sums} ${from} ${scopeWhere}
+         GROUP BY COALESCE(tu.environment, 'live')`
+      )
+      .all(...scopeParams);
+    const emptyTotals = { input_tokens: 0, output_tokens: 0, total_tokens: 0, estimated_cost_usd: 0, request_count: 0 };
+    const byEnvironment = {
+      live: split.find((row) => row.environment === 'live') || { environment: 'live', ...emptyTotals },
+      test: split.find((row) => row.environment === 'test') || { environment: 'test', ...emptyTotals },
+    };
+    return {
+      days: days ? Number(days) : null,
+      environment: environment || 'all',
+      totals,
+      byEnvironment,
+      byTeam: run('tu.team_id AS team_id, t.name AS team_name,', 'tu.team_id'),
+      byBot: run(
+        `tu.bot_account_id AS bot_id, b.name AS bot_name,
+         COALESCE(b.whatsapp_phone, b.last_whatsapp_phone) AS bot_phone,
+         tu.team_id AS team_id, t.name AS team_name,`,
+        'tu.bot_account_id, tu.team_id'
+      ),
+      byModel: run("COALESCE(NULLIF(tu.model, ''), 'none') AS model,", "COALESCE(NULLIF(tu.model, ''), 'none')"),
+      byCategory: run('tu.category AS category,', 'tu.category').map((row) => ({
+        ...row,
+        label: CATEGORY_LABELS[row.category] || row.category,
+      })),
+      daily: run(
+        "date(datetime(tu.created_at), '+5 hours', '+30 minutes') AS day,",
+        'day',
+        'day ASC'
+      ),
     };
   }
 

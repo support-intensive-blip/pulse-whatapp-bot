@@ -16,6 +16,7 @@ import TeamUsers from './pages/TeamUsers';
 import Integrations from './pages/Integrations';
 import Teams from './pages/Teams';
 import Account from './pages/Account';
+import TokenUsage from './pages/TokenUsage';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="bots/new" element={<RoleRoute level="admin"><BotWizard /></RoleRoute>} />
         <Route path="bots/:botId" element={<RoleRoute level="admin"><BotWorkspace /></RoleRoute>} />
         <Route path="knowledge" element={<RoleRoute level="admin"><Knowledge /></RoleRoute>} />
+        <Route path="usage" element={<RoleRoute level="admin"><TokenUsage /></RoleRoute>} />
         <Route path="team" element={<RoleRoute level="admin"><TeamUsers /></RoleRoute>} />
         <Route path="integrations" element={<RoleRoute level="admin"><Integrations /></RoleRoute>} />
         <Route path="teams" element={<RoleRoute level="owner"><Teams /></RoleRoute>} />

@@ -4,10 +4,10 @@ const { botAccountService } = require('../services/botAccountService');
 const { OPEN_STATUSES } = require('../services/actionItemService');
 const { requireAuth, requireTeam } = require('./middleware/auth');
 const { normalizePhoneDigits } = require('../utils/helpers');
+const { testProfileIds, normalizeEnv } = require('../services/trafficEnvironment');
 
 // Day buckets follow IST, the team's working day.
 const IST = "'+330 minutes'";
-const NOT_TEST = "cp.chat_id NOT LIKE '%@pulse.test'";
 
 function inList(values) {
   return values.map(() => '?').join(',');
@@ -29,8 +29,17 @@ function dayRange(days) {
  * owner), chat_profiles and action_items. Metrics the backend doesn't record yet
  * (e.g. AI pause/handoff history) are reported in `unsupported`, not estimated.
  */
-function buildAnalytics(bots, days) {
+function buildAnalytics(bots, days, environment = 'live') {
   const db = getDatabase();
+  // Test traffic = playground chats + chats with the bots' test numbers (see trafficEnvironment.js).
+  const env = normalizeEnv(environment);
+  const testIds = testProfileIds(db).map(Number).join(',') || '-1';
+  const MSG_FILTER = `COALESCE(m.environment, 'live') = '${env}'`;
+  const PROFILE_FILTER = env === 'test' ? `cp.id IN (${testIds})` : `cp.id NOT IN (${testIds})`;
+  const ACTION_FILTER =
+    env === 'test'
+      ? `chat_profile_id IN (${testIds})`
+      : `(chat_profile_id IS NULL OR chat_profile_id NOT IN (${testIds}))`;
   const phones = bots.map((bot) => normalizePhoneDigits(botAccountService.getPhone(bot))).filter(Boolean);
   const botIds = bots.map((bot) => bot.id);
   const range = dayRange(days);
@@ -52,7 +61,7 @@ function buildAnalytics(bots, days) {
         `SELECT date(m.timestamp, ${IST}) AS day, m.role, COUNT(*) AS c, COUNT(DISTINCT m.chat_profile_id) AS contacts
          FROM messages m
          JOIN chat_profiles cp ON cp.id = m.chat_profile_id
-         WHERE cp.owner_phone IN (${inList(phones)}) AND ${NOT_TEST}
+         WHERE cp.owner_phone IN (${inList(phones)}) AND ${MSG_FILTER}
            AND date(m.timestamp, ${IST}) >= ?
          GROUP BY day, m.role`
       )
@@ -75,7 +84,7 @@ function buildAnalytics(bots, days) {
     for (const row of db
       .prepare(
         `SELECT date(triggered_at, ${IST}) AS day, COUNT(*) AS c FROM action_items
-         WHERE bot_account_id IN (${inList(botIds)}) AND date(triggered_at, ${IST}) >= ?
+         WHERE bot_account_id IN (${inList(botIds)}) AND ${ACTION_FILTER} AND date(triggered_at, ${IST}) >= ?
          GROUP BY day`
       )
       .all(...botIds, since)) {
@@ -84,7 +93,7 @@ function buildAnalytics(bots, days) {
     for (const row of db
       .prepare(
         `SELECT date(completed_at, ${IST}) AS day, COUNT(*) AS c FROM action_items
-         WHERE bot_account_id IN (${inList(botIds)}) AND status = 'resolved' AND completed_at IS NOT NULL
+         WHERE bot_account_id IN (${inList(botIds)}) AND ${ACTION_FILTER} AND status = 'resolved' AND completed_at IS NOT NULL
            AND date(completed_at, ${IST}) >= ?
          GROUP BY day`
       )
@@ -95,7 +104,7 @@ function buildAnalytics(bots, days) {
       .prepare(
         `SELECT COUNT(*) AS n, AVG((julianday(completed_at) - julianday(triggered_at)) * 24) AS hours
          FROM action_items
-         WHERE bot_account_id IN (${inList(botIds)}) AND status = 'resolved' AND completed_at IS NOT NULL
+         WHERE bot_account_id IN (${inList(botIds)}) AND ${ACTION_FILTER} AND status = 'resolved' AND completed_at IS NOT NULL
            AND date(completed_at, ${IST}) >= ?`
       )
       .get(...botIds, since);
@@ -108,7 +117,7 @@ function buildAnalytics(bots, days) {
       ? db
           .prepare(
             `SELECT COUNT(*) AS total, SUM(CASE WHEN assistant_active = 1 THEN 1 ELSE 0 END) AS aiOn
-             FROM chat_profiles cp WHERE owner_phone = ? AND chat_type = 'contact' AND ${NOT_TEST}`
+             FROM chat_profiles cp WHERE owner_phone = ? AND chat_type = 'contact' AND ${PROFILE_FILTER}`
           )
           .get(phone)
       : { total: 0, aiOn: 0 };
@@ -116,14 +125,14 @@ function buildAnalytics(bots, days) {
       ? db
           .prepare(
             `SELECT m.role, COUNT(*) AS c FROM messages m JOIN chat_profiles cp ON cp.id = m.chat_profile_id
-             WHERE cp.owner_phone = ? AND ${NOT_TEST} AND date(m.timestamp, ${IST}) >= ?
+             WHERE cp.owner_phone = ? AND ${MSG_FILTER} AND date(m.timestamp, ${IST}) >= ?
              GROUP BY m.role`
           )
           .all(phone, since)
       : [];
     const byRole = Object.fromEntries(msgs.map((row) => [row.role, row.c]));
     const openActions = db
-      .prepare(`SELECT COUNT(*) AS c FROM action_items WHERE bot_account_id = ? AND status IN (${inList(OPEN_STATUSES)})`)
+      .prepare(`SELECT COUNT(*) AS c FROM action_items WHERE bot_account_id = ? AND ${ACTION_FILTER} AND status IN (${inList(OPEN_STATUSES)})`)
       .get(bot.id, ...OPEN_STATUSES).c;
     return {
       botId: bot.id,
@@ -143,6 +152,7 @@ function buildAnalytics(bots, days) {
   const sum = (obj) => Object.values(obj).reduce((a, b) => a + b, 0);
   return {
     days,
+    environment: env,
     range: { from: range[0], to: range[range.length - 1] },
     totals: {
       inbound: sum(series.inbound),
@@ -168,7 +178,7 @@ function createAnalyticsRouter() {
   router.get('/analytics', requireAuth, requireTeam, (req, res) => {
     const days = Math.max(7, Math.min(parseInt(req.query.days, 10) || 14, 90));
     const ids = new Set(req.scope.botIds);
-    res.json(buildAnalytics(req.scope.bots.filter((bot) => ids.has(bot.id)), days));
+    res.json(buildAnalytics(req.scope.bots.filter((bot) => ids.has(bot.id)), days, req.query.env));
   });
 
   return router;

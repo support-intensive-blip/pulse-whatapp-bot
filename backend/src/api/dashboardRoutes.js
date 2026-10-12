@@ -24,6 +24,7 @@ const { pushSubscriptionService } = require('../services/pushSubscriptionService
 const { pushNotificationService } = require('../services/pushNotificationService');
 const { dashboardAlertService } = require('../services/dashboardAlertService');
 const { createTeamRouter } = require('./teamRoutes');
+const { createUsageRouter } = require('./usageRoutes');
 const { createUserRouter } = require('./userRoutes');
 const { createBotRouter } = require('./botRoutes');
 const { createKnowledgeRouter } = require('./knowledgeRoutes');
@@ -764,6 +765,7 @@ function createDashboardRouter() {
   });
 
   router.use(createTeamRouter());
+  router.use(createUsageRouter());
   router.use(createUserRouter());
   router.use(createBotRouter());
   router.use(createKnowledgeRouter());

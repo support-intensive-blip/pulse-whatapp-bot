@@ -12,6 +12,7 @@ import {
   Settings2,
   Building2,
   Contact,
+  Coins,
   LogOut,
   Menu,
   X,
@@ -40,6 +41,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/bots', label: 'AI Bots', icon: Bot },
       { to: '/knowledge', label: 'Knowledge Base', icon: BookOpen },
+      { to: '/usage', label: 'Token Usage', icon: Coins },
       { to: '/team', label: 'Team & Users', icon: Users },
       { to: '/integrations', label: 'Integrations', icon: Plug },
     ],

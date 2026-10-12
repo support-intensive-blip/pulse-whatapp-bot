@@ -4,6 +4,11 @@ import { useAuth } from '../context/AuthContext';
 import { AiStatusBadge, Alert, Card, SectionHeader, SoonTag, Spinner, Tabs, formatPhone } from '../components/ds';
 import { LineChart } from '../components/charts/LineChart';
 
+const ENVIRONMENTS = [
+  { id: 'live', label: 'Live' },
+  { id: 'test', label: 'Testing' },
+];
+
 const RANGES = [
   { id: '7', label: '7 days' },
   { id: '14', label: '14 days' },
@@ -24,16 +29,17 @@ function Tile({ label, value, hint }) {
 export default function Analytics() {
   const { team, currentBot, scopeVersion } = useAuth();
   const [days, setDays] = useState('14');
+  const [env, setEnv] = useState('live');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setData(null);
     analyticsApi
-      .get(Number(days))
+      .get(Number(days), env)
       .then(setData)
       .catch((err) => setError(err.message));
-  }, [days, scopeVersion]);
+  }, [days, env, scopeVersion]);
 
   const t = data?.totals;
   const replies = t ? t.aiReplies + t.humanReplies : 0;
@@ -46,6 +52,14 @@ export default function Analytics() {
         subtitle={`${currentBot ? currentBot.name : 'All numbers'} · from stored messages and Call-to-Actions (IST days).`}
         action={<Tabs value={days} onChange={setDays} tabs={RANGES} />}
       />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Tabs value={env} onChange={setEnv} tabs={ENVIRONMENTS} />
+        <p className="text-xs text-ink-muted">
+          {env === 'live'
+            ? 'Real students only — playground chats and test numbers are excluded.'
+            : "Playground sessions and chats with each bot's test numbers."}
+        </p>
+      </div>
       {error && <Alert tone="error" className="mb-4">{error}</Alert>}
 
       {!data ? (

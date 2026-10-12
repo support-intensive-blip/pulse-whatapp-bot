@@ -179,6 +179,11 @@ export const teamsApi = {
   auditLog: (teamId) => api(`/audit-log${qs({ teamId })}`, { allNumbers: true }),
 };
 
+// Admins see their team; the owner sees every team (teamId 'all') or one.
+export const usageApi = {
+  tokens: ({ days, teamId, env } = {}) => api(`/usage/tokens${qs({ days, teamId, env })}`, { allNumbers: true }),
+};
+
 export const usersApi = {
   members: () => api('/team/members', { allNumbers: true }),
   list: () => api('/users', { allNumbers: true }),
@@ -252,7 +257,8 @@ export const contactsApi = {
 };
 
 export const analyticsApi = {
-  get: (days = 14) => api(`/analytics${qs({ days })}`),
+  // env: 'live' (real students) | 'test' (playground + test numbers)
+  get: (days = 14, env = 'live') => api(`/analytics${qs({ days, env })}`),
 };
 
 export const adminApi = {

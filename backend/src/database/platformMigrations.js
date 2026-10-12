@@ -137,6 +137,23 @@ function runPlatformMigrations(database, helpers) {
   );
   migrateActionItemStatuses(database);
 
+  // Token usage attributed to the bot and the team it belonged to at the time of the call.
+  addColumns(
+    database,
+    'token_usage',
+    [
+      ['bot_account_id', 'INTEGER'],
+      ['team_id', 'INTEGER'],
+    ],
+    helpers
+  );
+  database.exec('CREATE INDEX IF NOT EXISTS idx_token_usage_bot ON token_usage(bot_account_id, created_at)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_token_usage_team ON token_usage(team_id, created_at)');
+
+  // 'test' (playground / test numbers) or 'live'; NULL until backfilled (trafficEnvironment.js).
+  addColumns(database, 'messages', [['environment', 'TEXT']], helpers);
+  addColumns(database, 'token_usage', [['environment', 'TEXT']], helpers);
+
   database.exec(PLATFORM_TABLES_SQL);
 }
 

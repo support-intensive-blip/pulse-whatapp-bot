@@ -7,6 +7,7 @@ const { MAX_MESSAGES_PER_USER, MESSAGE_ROLES } = require('../utils/constants');
 const { TOKEN_BUDGET } = require('../config/tokenBudget');
 const { TOKEN_CATEGORIES } = require('../config/tokenCategories');
 const { parseTimestamp } = require('../utils/time');
+const { environmentForProfile } = require('./trafficEnvironment');
 
 const MAX_SUMMARY_CONTEXT_CHARS = Number(process.env.CHAT_SUMMARY_CONTEXT_CHARS) || 8000;
 
@@ -84,8 +85,8 @@ class MemoryService {
     try {
       const result = db
         .prepare(
-          `INSERT INTO messages (user_id, chat_profile_id, role, content, source, wa_message_id, kb_meta)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (user_id, chat_profile_id, role, content, source, wa_message_id, kb_meta, environment)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           ownerUserId,
@@ -94,7 +95,8 @@ class MemoryService {
           content,
           source,
           waMessageId,
-          this.serializeKbMeta(kbMeta)
+          this.serializeKbMeta(kbMeta),
+          environmentForProfile(db, safeChatProfileId)
         );
 
       logger.info(`Stored message for chat profile ${chatProfileId}, role=${role}, source=${source || 'n/a'}`);
