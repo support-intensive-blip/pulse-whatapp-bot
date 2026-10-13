@@ -244,6 +244,16 @@ async function main() {
   const kbStatus = await call('GET', `/api/bots/${A1}/knowledge/status`, { token: adminA });
   check('linked resource is indexed for the bot', kbStatus.json?.ready && kbStatus.json.chunkCount > 0, JSON.stringify(kbStatus.json));
   check('other team cannot link it', (await call('PUT', `/api/bots/${B1}/knowledge`, { token: adminB, body: { resourceIds: [kb.json.resource.id] } })).status === 400);
+  const newVersion = () => {
+    const fd = new FormData();
+    fd.append('file', new Blob(['QUESTION_ID: q1\nQ: Fee?\nA: 200']), 'faq-v2.txt');
+    return fd;
+  };
+  check('other team cannot replace its file', (await call('PUT', `/api/knowledge/${kb.json.resource.id}/file`, { token: adminB, body: newVersion(), raw: true })).status === 404);
+  const replaced = await call('PUT', `/api/knowledge/${kb.json.resource.id}/file`, { token: adminA, body: newVersion(), raw: true });
+  check('admin replaces a knowledge file', replaced.status === 200 && replaced.json.contentChanged && replaced.json.resource.filename === 'faq-v2.txt', replaced.text);
+  const kbAfter = await call('GET', `/api/knowledge/${kb.json.resource.id}`, { token: adminA });
+  check('replacement content is stored', kbAfter.json?.resource?.content.includes('A: 200'));
 
   // ---- Analytics ----
   const analytics = await call('GET', '/api/analytics', { token: userA });

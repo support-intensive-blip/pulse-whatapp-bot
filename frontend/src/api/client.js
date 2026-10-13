@@ -230,6 +230,11 @@ export const knowledgeApi = {
     if (botIds?.length) fd.append('botIds', botIds.join(','));
     return api('/knowledge', { method: 'POST', body: fd, allNumbers: true, timeoutMs: 60000 });
   },
+  replaceFile: (id, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api(`/knowledge/${id}/file`, { method: 'PUT', body: fd, allNumbers: true, timeoutMs: 60000 });
+  },
   update: (id, body) => api(`/knowledge/${id}`, { method: 'PATCH', body, allNumbers: true }),
   remove: (id) => api(`/knowledge/${id}`, { method: 'DELETE', allNumbers: true }),
 };

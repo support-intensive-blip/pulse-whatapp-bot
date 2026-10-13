@@ -15,7 +15,8 @@ const KNOWLEDGE_BASE_PATH =
 // Vector store backend. 'local' = an in-server hybrid index (TF-IDF dense + BM25
 // sparse, persisted to data/kb_vectors.json + data/kb_bm25_global.json). No
 // third-party vector service or hosted embedding API is called.
-// Set VECTOR_BACKEND=vertex|pinecone to opt back into an external service.
+// VECTOR_BACKEND=supabase stores OpenAI embeddings in Supabase pgvector (needs
+// SUPABASE_DB_URL); vertex|pinecone opt into those hosted services instead.
 const VECTOR_BACKEND = (process.env.VECTOR_BACKEND || 'local').toLowerCase();
 
 // Prompt that decides when an inbound message should raise an action item.

@@ -11,7 +11,8 @@
     "pinecone:setup": "node src/scripts/setup-pinecone.js",
     "vertex:setup": "node src/scripts/setup-vertex-vector-search.js",
     "supabase:schema": "node src/scripts/generate-supabase-schema.js",
-    "supabase:migrate": "node src/scripts/migrate-sqlite-to-supabase.js"
+    "supabase:migrate": "node src/scripts/migrate-sqlite-to-supabase.js",
+    "kb:migrate-supabase": "node src/scripts/migrate-kb-to-supabase.js"
   },
   "engines": {
     "node": ">=22.0.0"

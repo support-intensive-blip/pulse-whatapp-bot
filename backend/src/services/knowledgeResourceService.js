@@ -68,8 +68,11 @@ class KnowledgeResourceService {
     return this.findById(result.lastInsertRowid);
   }
 
-  /** `detachFile`: a dashboard edit stops a file-backed resource from following the repo file. */
-  update(id, { title, content, detachFile = false } = {}) {
+  /**
+   * `detachFile`: a dashboard edit stops a file-backed resource from following the repo file.
+   * `kind` / `filename` are set when an uploaded file replaces the content.
+   */
+  update(id, { title, content, kind, filename, detachFile = false } = {}) {
     const fields = ["updated_at = datetime('now')"];
     const values = [];
     if (title !== undefined) {
@@ -82,6 +85,14 @@ class KnowledgeResourceService {
       fields.push('content = ?', 'content_hash = ?');
       values.push(text, hashText(text));
       if (detachFile) fields.push('source_path = NULL');
+    }
+    if (kind !== undefined) {
+      fields.push('kind = ?');
+      values.push(kind);
+    }
+    if (filename !== undefined) {
+      fields.push('filename = ?');
+      values.push(filename);
     }
     values.push(id);
     getDatabase().prepare(`UPDATE knowledge_resources SET ${fields.join(', ')} WHERE id = ?`).run(...values);

@@ -187,4 +187,8 @@ module.exports = {
   getDocCount(teamId) {
     return getIndex(teamId).docs.length;
   },
+  getSourceHash(teamId) {
+    const index = getIndex(teamId);
+    return index.docs.length ? index.sourceHash : null;
+  },
 };

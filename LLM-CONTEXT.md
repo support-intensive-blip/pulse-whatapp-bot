@@ -155,9 +155,14 @@ Open risks and things to verify for this change:
 
 - Source: `backend/knowledge-base/nxtwave-intensive-brain-memory-kb.txt`, in QA blocks keyed
   by `QUESTION_ID:`.
-- Default `VECTOR_BACKEND=local`: an in-server TF-IDF dense index plus a BM25 sparse index,
-  fused with RRF (weights 0.85 / 0.15). It is persisted to `data/kb_vectors.json` and
-  `data/kb_bm25_global.json`. No external embedding API is called.
+- Production `VECTOR_BACKEND=supabase`: OpenAI embeddings stored in Supabase pgvector
+  (`services/supabaseVectorStore.js`, tables `kb_vector_chunks` / `kb_vector_indexes`, one
+  namespace per bot, generation swap on re-index). Dense hits fuse with a BM25 sparse index via
+  RRF (weights 0.85 / 0.15); BM25 is rebuilt from Supabase when its local file is missing.
+- Fallback / default `VECTOR_BACKEND=local`: an in-server TF-IDF dense index plus BM25,
+  persisted to `data/kb_vectors*.json` and `data/kb_bm25_*.json`. No external embedding API.
+- Team admins upload / replace KB documents on the Knowledge Base page
+  (`POST /api/knowledge`, `PUT /api/knowledge/:id/file`).
 - The index re-indexes automatically when the KB file hash changes (checked every 30 min) or
   on `npm run ingest-kb`.
 - Retrieval runs only in INTENSIVE mode. Vertex AI and Pinecone backends exist but are dormant.

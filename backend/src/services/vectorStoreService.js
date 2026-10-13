@@ -12,6 +12,7 @@ const pineconeClient = require('./pineconeClient');
 const kbHybridSearch = require('./kbHybridSearch');
 const pineconeVectorStore = require('./pineconeVectorStore');
 const vertexVectorStore = require('./vertexVectorStore');
+const supabaseVectorStore = require('./supabaseVectorStore');
 const intensiveConfig = require('../config/intensiveConfig');
 
 const GLOBAL_STORE_PATH = path.join(process.cwd(), DATA_DIR, 'kb_vectors.json');
@@ -185,12 +186,21 @@ class VectorStoreService {
   }
 
   /**
-   * 'vertex' | 'pinecone' | 'local'. Single-tenant default is 'local' (in-server
-   * hybrid index, no external service) — see src/config/intensiveConfig.js.
-   * Opt back into a hosted store only by setting VECTOR_BACKEND=vertex|pinecone.
+   * 'supabase' | 'vertex' | 'pinecone' | 'local'. Single-tenant default is 'local'
+   * (in-server hybrid index, no external service) — see src/config/intensiveConfig.js.
+   * VECTOR_BACKEND=supabase keeps vectors in Supabase pgvector (needs SUPABASE_DB_URL);
+   * without that URL it falls back to 'local' so the bot keeps answering.
    */
   activeBackend() {
     const backend = intensiveConfig.VECTOR_BACKEND;
+    if (backend === 'supabase') {
+      if (supabaseVectorStore.isEnabled()) return 'supabase';
+      if (!this.warnedSupabaseFallback) {
+        this.warnedSupabaseFallback = true;
+        logger.error('VECTOR_BACKEND=supabase but SUPABASE_DB_URL is not set — using the local KB index');
+      }
+      return 'local';
+    }
     if (backend === 'vertex' || backend === 'pinecone') return backend;
     return 'local';
   }
@@ -204,7 +214,21 @@ class VectorStoreService {
   }
 
   remoteStore() {
-    return this.useVertex() ? vertexVectorStore : pineconeVectorStore;
+    const backend = this.activeBackend();
+    if (backend === 'supabase') return supabaseVectorStore;
+    return backend === 'vertex' ? vertexVectorStore : pineconeVectorStore;
+  }
+
+  /**
+   * The BM25 file lives on local disk; Supabase holds the source of truth. Rebuild
+   * the sparse index from the live generation when the file is missing or stale
+   * (fresh container, no persistent disk, or another instance re-indexed).
+   */
+  async syncSparseFromSupabase(teamId) {
+    const meta = await supabaseVectorStore.getStats(teamId);
+    if (!meta.sourceHash || kbBm25Index.getSourceHash(teamId) === meta.sourceHash) return;
+    const { sourceHash, docs } = await supabaseVectorStore.listBm25Docs(teamId);
+    if (docs.length) kbBm25Index.indexChunks(teamId, docs, sourceHash);
   }
 
   getLocalStore(teamId) {
@@ -221,6 +245,13 @@ class VectorStoreService {
 
   async loadFromDisk(teamId = null) {
     kbBm25Index.loadFromDisk(teamId);
+    if (this.activeBackend() === 'supabase') {
+      try {
+        await this.syncSparseFromSupabase(teamId);
+      } catch (error) {
+        logger.warn(`BM25 rebuild from Supabase failed (${teamKey(teamId)}): ${error.message}`);
+      }
+    }
     if (this.activeBackend() !== 'local') return (await this.remoteStore().getChunkCount(teamId)) > 0;
     return this.getLocalStore(teamId).loadFromDisk();
   }

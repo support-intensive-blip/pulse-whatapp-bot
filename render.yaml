@@ -29,7 +29,7 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     # Render allows exactly one disk. It's mounted at /app/persist and holds
-    # data/ (SQLite conversation history + local KB index) — docker-entrypoint.sh
+    # data/ (SQLite conversation history + BM25 cache) — docker-entrypoint.sh
     # symlinks /app/data into it so every conversation survives redeploys.
     disk:
       name: wwebjs-session
@@ -40,8 +40,10 @@ services:
         value: production
       - key: PORT
         value: "3000"
+      # KB vectors live in Supabase pgvector (needs SUPABASE_DB_URL below); without
+      # that URL the server falls back to the local on-disk index and logs an error.
       - key: VECTOR_BACKEND
-        value: local
+        value: supabase
       - key: OPENAI_MODEL_SMART
         value: gpt-4o
       - key: OPENAI_MODEL_FAST

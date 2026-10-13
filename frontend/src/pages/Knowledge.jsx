@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpen, FileText, Plus, Search, Upload } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Database, FileText, Plus, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { knowledgeApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Alert, Badge, Button, Card, ConfirmDialog, EmptyState, Input, Modal, SectionHeader, Spinner, Textarea } from '../components/ds';
@@ -13,13 +13,60 @@ function IndexBadge({ index }) {
   return <Badge tone="neutral">No index</Badge>;
 }
 
+const ACCEPT = '.txt,.md,.csv,.json,.pdf';
+const ACCEPTED_EXT = /\.(txt|md|csv|json|pdf)$/i;
+
+const BACKEND_LABEL = {
+  'supabase-pgvector': 'Supabase (pgvector)',
+  'local-hybrid': 'Server disk',
+  'pinecone-hybrid-integrated': 'Pinecone',
+  'pinecone-hybrid-inference': 'Pinecone',
+};
+
+function FileDropZone({ files, onFiles, multiple = false }) {
+  const [dragging, setDragging] = useState(false);
+
+  function accept(list) {
+    const picked = [...(list || [])].filter((f) => ACCEPTED_EXT.test(f.name));
+    if (picked.length) onFiles(multiple ? picked : picked.slice(0, 1));
+  }
+
+  return (
+    <label
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        accept(e.dataTransfer.files);
+      }}
+      className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-8 text-center ${dragging ? 'border-primary bg-primary-soft' : 'border-border hover:bg-slate-50'}`}
+    >
+      <Upload size={22} className="text-ink-muted" />
+      <span className="text-sm font-medium text-ink">
+        {files.length === 1
+          ? files[0].name
+          : files.length > 1
+            ? `${files.length} files selected`
+            : `Drop ${multiple ? 'files' : 'a file'} here or click to choose`}
+      </span>
+      <span className="text-xs text-ink-muted">.txt, .md, .csv, .json or .pdf · up to 20 MB each · Q&amp;A blocks starting with QUESTION_ID: give the most precise answers</span>
+      <input type="file" accept={ACCEPT} multiple={multiple} className="sr-only" onChange={(e) => accept(e.target.files)} />
+    </label>
+  );
+}
+
 function AddResourceModal({ open, onClose, bots, onAdded }) {
   const [mode, setMode] = useState('upload');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [botIds, setBotIds] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -27,8 +74,9 @@ function AddResourceModal({ open, onClose, bots, onAdded }) {
       setMode('upload');
       setTitle('');
       setContent('');
-      setFile(null);
+      setFiles([]);
       setBotIds([]);
+      setProgress('');
       setError('');
     }
   }, [open]);
@@ -37,18 +85,41 @@ function AddResourceModal({ open, onClose, bots, onAdded }) {
     setBusy(true);
     setError('');
     try {
-      const data = mode === 'upload'
-        ? await knowledgeApi.upload(file, { title, botIds })
-        : await knowledgeApi.createText({ title, content, botIds });
-      onAdded(data.resource);
+      if (mode === 'text') {
+        const data = await knowledgeApi.createText({ title, content, botIds });
+        onAdded([data.resource]);
+        return;
+      }
+      // One document per file, uploaded one at a time; failed files stay selected to retry.
+      const added = [];
+      const failed = [];
+      for (const [i, file] of files.entries()) {
+        setProgress(files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : 'Uploading…');
+        try {
+          const data = await knowledgeApi.upload(file, { title: files.length === 1 ? title : '', botIds });
+          added.push(data.resource);
+        } catch (err) {
+          failed.push({ file, message: err.message });
+        }
+      }
+      if (!failed.length) {
+        onAdded(added);
+        return;
+      }
+      setFiles(failed.map((f) => f.file));
+      setError(
+        `${added.length ? `${added.length} added. ` : ''}Failed: ${failed.map((f) => `${f.file.name} (${f.message})`).join('; ')}`
+      );
+      if (added.length) onAdded(added, { keepOpen: true });
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
+      setProgress('');
     }
   }
 
-  const valid = mode === 'upload' ? Boolean(file) : title.trim() && content.trim();
+  const valid = mode === 'upload' ? files.length > 0 : title.trim() && content.trim();
 
   return (
     <Modal
@@ -60,7 +131,9 @@ function AddResourceModal({ open, onClose, bots, onAdded }) {
       footer={
         <>
           <Button variant="secondary" size="md" onClick={onClose}>Cancel</Button>
-          <Button size="md" onClick={save} disabled={!valid || busy}>{busy ? 'Adding…' : 'Add'}</Button>
+          <Button size="md" onClick={save} disabled={!valid || busy}>
+            {busy ? progress || 'Adding…' : mode === 'upload' && files.length > 1 ? `Add ${files.length} files` : 'Add'}
+          </Button>
         </>
       }
     >
@@ -78,14 +151,25 @@ function AddResourceModal({ open, onClose, bots, onAdded }) {
             </button>
           ))}
         </div>
-        <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={mode === 'upload' ? 'Defaults to the file name' : 'e.g. Refund policy'} />
+        {(mode === 'text' || files.length <= 1) && (
+          <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={mode === 'upload' ? 'Defaults to the file name' : 'e.g. Refund policy'} />
+        )}
         {mode === 'upload' ? (
-          <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center hover:bg-slate-50">
-            <Upload size={22} className="text-ink-muted" />
-            <span className="text-sm font-medium text-ink">{file ? file.name : 'Choose a .txt, .md, .csv, .json or .pdf file'}</span>
-            <span className="text-xs text-ink-muted">Q&amp;A blocks starting with QUESTION_ID: give the most precise answers</span>
-            <input type="file" accept=".txt,.md,.csv,.json,.pdf" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          </label>
+          <div className="space-y-2">
+            <FileDropZone files={files} onFiles={setFiles} multiple />
+            {files.length > 1 && (
+              <ul className="space-y-1">
+                {files.map((f) => (
+                  <li key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-1.5 text-xs text-ink">
+                    <span className="truncate">{f.name}</span>
+                    <button type="button" aria-label={`Remove ${f.name}`} className="text-ink-muted hover:text-ink" onClick={() => setFiles((list) => list.filter((x) => x !== f))}>
+                      <X size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         ) : (
           <Textarea label="Content" value={content} onChange={(e) => setContent(e.target.value)} rows={12} className="font-mono text-xs" />
         )}
@@ -119,6 +203,7 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const fileInput = useRef(null);
 
   useEffect(() => {
     if (!resourceId) return;
@@ -151,6 +236,25 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
     }
   }
 
+  async function replaceFile(file) {
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    try {
+      const data = await knowledgeApi.replaceFile(resource.id, file);
+      onChanged(
+        data.contentChanged
+          ? `“${data.resource.title}” replaced with ${file.name}${data.resource.usedBy?.length ? ' — bots using it are re-indexing.' : '.'}`
+          : `${file.name} has the same content — nothing changed.`
+      );
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    } finally {
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  }
+
   async function remove() {
     setBusy(true);
     try {
@@ -173,6 +277,16 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
         resource && (
           <>
             <Button variant="ghost" size="md" className="mr-auto text-danger" onClick={() => setConfirmDelete(true)} disabled={busy}>Delete</Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ACCEPT}
+              className="sr-only"
+              onChange={(e) => replaceFile(e.target.files?.[0])}
+            />
+            <Button variant="secondary" size="md" onClick={() => fileInput.current?.click()} disabled={busy}>
+              <RefreshCw size={14} /> Replace file
+            </Button>
             <Button variant="secondary" size="md" onClick={onClose}>Close</Button>
             <Button size="md" onClick={save} disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save'}</Button>
           </>
@@ -185,8 +299,11 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
       ) : (
         <div className="space-y-4">
           {resource.fileBacked && (
-            <Alert tone="info">This document mirrors a file shipped with the backend. Editing it here detaches it from that file.</Alert>
+            <Alert tone="info">This document mirrors a file shipped with the backend. Editing it or uploading a replacement here detaches it from that file.</Alert>
           )}
+          <p className="text-sm text-ink-muted">
+            {resource.filename ? `Uploaded from ${resource.filename}. ` : ''}Use <span className="font-medium text-ink">Replace file</span> to upload a new version — every bot using it re-indexes automatically.
+          </p>
           <p className="text-sm text-ink-muted">
             Used by: {resource.usedBy?.length ? resource.usedBy.map((b) => b.name).join(', ') : 'no bot yet'}
           </p>
@@ -215,6 +332,8 @@ export default function Knowledge() {
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [message, setMessage] = useState(null);
+  // Re-indexing starts in the background a moment after a change; poll briefly so it shows up.
+  const [watchUntil, setWatchUntil] = useState(0);
 
   const load = useCallback(() => knowledgeApi.list().then(setData).catch((err) => setMessage({ tone: 'error', text: err.message })), []);
 
@@ -222,12 +341,21 @@ export default function Knowledge() {
     load();
   }, [load, scopeVersion, team?.id]);
 
-  // Keep index status fresh while any bot is indexing.
+  // Keep index status fresh while any bot is indexing (or one is about to start).
   useEffect(() => {
-    if (!data?.bots.some((b) => b.index?.indexing?.status === 'indexing')) return undefined;
-    const t = setInterval(load, 2500);
-    return () => clearInterval(t);
-  }, [data, load]);
+    const indexing = data?.bots.some((b) => b.index?.indexing?.status === 'indexing');
+    if (!indexing && Date.now() > watchUntil) return undefined;
+    const t = setTimeout(load, 2500);
+    return () => clearTimeout(t);
+  }, [data, load, watchUntil]);
+
+  const changed = useCallback((text) => {
+    setMessage({ tone: 'success', text });
+    setWatchUntil(Date.now() + 10000);
+    load();
+  }, [load]);
+
+  const storeBackend = data?.bots.find((b) => b.index?.backend)?.index.backend;
 
   const resources = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -289,7 +417,13 @@ export default function Knowledge() {
           </div>
 
           <Card className="h-fit">
-            <p className="mb-3 text-sm font-semibold text-ink">Bot indexes</p>
+            <p className="text-sm font-semibold text-ink">Bot indexes</p>
+            {storeBackend && (
+              <p className="mb-3 mt-1 flex items-center gap-1.5 text-xs text-ink-muted">
+                <Database size={12} /> Vectors stored in {BACKEND_LABEL[storeBackend] || storeBackend}
+              </p>
+            )}
+            {!storeBackend && <div className="mb-3" />}
             {data.bots.length ? (
               <ul className="space-y-3">
                 {data.bots.map((b) => (
@@ -310,10 +444,9 @@ export default function Knowledge() {
         open={adding}
         onClose={() => setAdding(false)}
         bots={data?.bots || []}
-        onAdded={(resource) => {
-          setAdding(false);
-          setMessage({ tone: 'success', text: `“${resource.title}” added.` });
-          load();
+        onAdded={(added, { keepOpen = false } = {}) => {
+          if (!keepOpen) setAdding(false);
+          changed(added.length === 1 ? `“${added[0].title}” added.` : `${added.length} documents added.`);
         }}
       />
       <ResourceModal
@@ -321,8 +454,7 @@ export default function Knowledge() {
         onClose={() => setOpenId(null)}
         onChanged={(text) => {
           setOpenId(null);
-          setMessage({ tone: 'success', text });
-          load();
+          changed(text);
         }}
       />
     </div>

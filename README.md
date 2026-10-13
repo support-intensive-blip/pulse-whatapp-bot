@@ -124,9 +124,17 @@ end-to-end check of these rules against a throwaway database.
 Knowledge documents belong to a team (`knowledge_resources`, text stored in the DB); each bot links
 the documents it answers from. Every bot has its **own index**, built from its linked documents:
 
-- **Vector store:** `local` — an **in-server** hybrid index (TF-IDF dense + BM25 sparse, fused by
-  reciprocal-rank fusion), persisted per bot to `data/kb_vectors_team_bot_<id>.json` (+ BM25).
-  **No third-party vector service or hosted embedding API is called.**
+- **Vector store:** `VECTOR_BACKEND=supabase` (production) — OpenAI embeddings
+  (`KB_EMBED_MODEL`, default `text-embedding-3-small`, 1536d) in **Supabase pgvector**
+  (`kb_vector_chunks` + `kb_vector_indexes`, one namespace per bot, created on first use over
+  `SUPABASE_DB_URL`). Dense hits are fused with an in-process BM25 index, which is rebuilt from
+  Supabase whenever the local copy is missing — so no persistent disk is needed for the KB.
+  A re-index writes a new generation and swaps it in atomically; a failed embed keeps the old one.
+  Without `SUPABASE_DB_URL` it falls back to `local`: the in-server TF-IDF + BM25 index persisted
+  to `data/kb_vectors_team_bot_<id>.json` (no external calls).
+- Team admins manage documents on **Knowledge Base**: upload one or many files (drag and drop),
+  paste text, edit, or **Replace file** to upload a new version. Replacing a file-backed document
+  detaches it from the repo file.
 - A bot re-indexes when its linked documents change (fingerprint of ids + content hashes), on the
   dashboard's "Re-index" button, and on the periodic refresh, which also re-reads file-backed
   documents.
@@ -134,7 +142,11 @@ the documents it answers from. Every bot has its **own index**, built from its l
 Retrieval is gated to `INTENSIVE` conversation mode only. `npm run ingest-kb` /
 `force-reindex-kb.js` still rebuild the old global index used outside a bot context.
 
-`VECTOR_BACKEND=vertex|pinecone` opts back into a hosted store (requires the matching env vars and
+Moving to Supabase: set `SUPABASE_DB_URL`, run `npm run kb:migrate-supabase` once (re-embeds every
+bot's linked documents), then deploy with `VECTOR_BACKEND=supabase`. Without the script, each bot
+re-embeds on its first message after the switch (~20–30 s for a large KB).
+
+`VECTOR_BACKEND=vertex|pinecone` opts into those hosted stores instead (requires the matching env vars and
 `vectorStoreService.js` / the Vertex + Pinecone modules, which are retained but dormant). KB
 authoring format, chunking rules and the topic guard are in
 **[docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md)**.
@@ -239,7 +251,7 @@ Runtime data (`data/`, `logs/`, `uploads/`, `secrets/`, `.env`) lives inside `ba
 | KB translation | `KB_TRANSLATE_MODEL`, `KB_TRANSLATE_TEMPERATURE` |
 | Hybrid retrieval | `KB_HYBRID_DENSE_WEIGHT`, `KB_HYBRID_SPARSE_WEIGHT`, `KB_MIN_SEARCH_SCORE`, `KB_TOP_K` |
 | Storage | `BQ_ENABLED`, `SQLITE_ENABLED`, `SQLITE_BACKUP_ENABLED`, `SQLITE_DELETION_PASSWORD` |
-| Vector backend | `VECTOR_BACKEND` — defaults to `local` (in-server, no external calls); set `vertex`\|`pinecone` to use a hosted store |
+| Vector backend | `VECTOR_BACKEND` — `supabase` (pgvector over `SUPABASE_DB_URL`; `KB_EMBED_MODEL`, `KB_EMBED_DIMENSIONS`, `KB_PG_POOL_MAX`), or `local` (default, in-server, no external calls); `vertex`\|`pinecone` for those hosted stores |
 | Pinecone (only if `VECTOR_BACKEND=pinecone`) | `PINECONE_API_KEY`, `PINECONE_INDEX`, `PINECONE_INTEGRATED` |
 | Vertex AI / GCP (only if `VECTOR_BACKEND=vertex`) | `GCP_PROJECT_ID`, `VERTEX_REGION`, `VERTEX_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_ID`, `VERTEX_DEPLOYED_INDEX_ID`, `VERTEX_INDEX_ENDPOINT_DOMAIN`, `GOOGLE_APPLICATION_CREDENTIALS` |
 | KB source override | `KNOWLEDGE_BASE_PATH` (defaults to `knowledge-base/nxtwave-intensive-brain-memory-kb.txt`) |
@@ -249,7 +261,8 @@ Runtime data (`data/`, `logs/`, `uploads/`, `secrets/`, `.env`) lives inside `ba
 
 ### Knowledge base setup
 
-The default `local` backend needs no provisioning. It indexes on first start and re-indexes
+The `supabase` backend creates its tables on first use (`npm run kb:migrate-supabase` warms every
+bot's index). The `local` backend needs no provisioning. It indexes on first start and re-indexes
 automatically whenever the KB file changes; to force it:
 
 ```bash

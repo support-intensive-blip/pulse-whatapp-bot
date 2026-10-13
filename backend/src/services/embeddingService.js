@@ -12,9 +12,10 @@ class EmbeddingService {
   }
 
   usePineconeInference() {
-    // 'local' backend must stay fully in-server — never call Pinecone's hosted
-    // embedding API even if PINECONE_* env vars are present.
-    if (intensiveConfig.VECTOR_BACKEND === 'local') return false;
+    // The local store must stay fully in-server — never call Pinecone's hosted
+    // embedding API even if PINECONE_* env vars are present (this also covers
+    // VECTOR_BACKEND=supabase falling back to local).
+    if (intensiveConfig.VECTOR_BACKEND !== 'pinecone') return false;
     return pineconeClient.isEnabled();
   }
 

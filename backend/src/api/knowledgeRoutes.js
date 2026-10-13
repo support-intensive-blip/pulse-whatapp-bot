@@ -139,6 +139,36 @@ function createKnowledgeRouter() {
     }
   });
 
+  // Upload a new version of a document (multipart field "file"); bots using it re-index.
+  router.put('/knowledge/:resourceId/file', ...adminOnly, upload.single('file'), async (req, res) => {
+    const resource = loadResource(req, res);
+    if (!resource) return undefined;
+    if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
+    try {
+      const extracted = await knowledgeResourceService.extractText({
+        buffer: req.file.buffer,
+        filename: req.file.originalname,
+        mimetype: req.file.mimetype,
+      });
+      const updated = knowledgeResourceService.update(resource.id, {
+        content: extracted.text,
+        kind: extracted.kind,
+        filename: req.file.originalname,
+        detachFile: true,
+      });
+      const changed = updated.content_hash !== resource.content_hash;
+      const users = knowledgeResourceService.botsUsing(resource.id, req.scope.teamId);
+      if (changed) reindexBots(users.map((bot) => bot.id));
+      audit(req, 'knowledge.replace_file', updated, { filename: req.file.originalname, contentChanged: changed });
+      return res.json({
+        resource: knowledgeResourceService.toPublic(updated, { usedBy: usedBy(req, resource.id) }),
+        contentChanged: changed,
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
   router.delete('/knowledge/:resourceId', ...adminOnly, (req, res) => {
     const resource = loadResource(req, res);
     if (!resource) return undefined;
