@@ -75,8 +75,8 @@ Facts about the pipeline:
 - No typing indicator: the Gallabox API has none.
 - WhatsApp's 24-hour rule applies: free-form sends only work within 24h of the contact's last
   message, so reminders and coach messages to quiet chats fail.
-- Slash commands (`src/commands/*`) are dead code. The Business API has no self-chat, so owner
-  commands can't be reached from WhatsApp.
+- There are no slash commands (the old `src/commands/*` were removed — the Business API has no
+  self-chat to type them in). A message starting with `/` is answered like any other.
 - Voice notes are transcribed with Whisper (needs ffmpeg). PDFs are text-extracted (12k chars).
   Images, videos and links are acknowledged and also create a "Call to Action" item.
 - Scope firewall and the AI escalation classifier exist but are off (`intensiveConfig.js`).

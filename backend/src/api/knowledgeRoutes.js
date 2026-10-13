@@ -9,6 +9,13 @@ const logger = require('../utils/logger');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
+/** Text the dashboard already extracted from a file (browser-side PDF parsing). */
+function textUpload(body) {
+  const filename = body?.filename ? String(body.filename).slice(0, 255) : null;
+  const kind = body?.kind === 'pdf' || /\.pdf$/i.test(filename || '') ? 'pdf' : 'text';
+  return { filename, kind };
+}
+
 function reindexBots(botIds) {
   for (const botId of botIds) {
     const bot = botAccountService.findById(botId);
@@ -76,12 +83,13 @@ function createKnowledgeRouter() {
     });
   });
 
-  // JSON { title, content, botIds? } or multipart file upload (field "file", optional "title", "botIds").
+  // JSON { title, content, botIds?, kind?, filename? } (the dashboard sends file text it
+  // extracted itself) or multipart file upload (field "file", optional "title", "botIds").
   router.post('/knowledge', ...adminOnly, upload.single('file'), async (req, res) => {
     try {
       let { title, content } = req.body || {};
-      let kind = 'text';
-      let filename = null;
+      let { kind, filename } = textUpload(req.body);
+      if (filename && !title) title = filename.replace(/\.[^.]+$/, '');
       if (req.file) {
         const extracted = await knowledgeResourceService.extractText({
           buffer: req.file.buffer,
@@ -139,27 +147,33 @@ function createKnowledgeRouter() {
     }
   });
 
-  // Upload a new version of a document (multipart field "file"); bots using it re-index.
+  // Upload a new version of a document — JSON { content, filename, kind? } with text the
+  // dashboard extracted, or multipart field "file". Bots using it re-index.
   router.put('/knowledge/:resourceId/file', ...adminOnly, upload.single('file'), async (req, res) => {
     const resource = loadResource(req, res);
     if (!resource) return undefined;
-    if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
+    if (!req.file && !req.body?.content) return res.status(400).json({ error: 'Choose a file to upload' });
     try {
-      const extracted = await knowledgeResourceService.extractText({
-        buffer: req.file.buffer,
-        filename: req.file.originalname,
-        mimetype: req.file.mimetype,
-      });
+      const extracted = req.file
+        ? {
+            ...(await knowledgeResourceService.extractText({
+              buffer: req.file.buffer,
+              filename: req.file.originalname,
+              mimetype: req.file.mimetype,
+            })),
+            filename: req.file.originalname,
+          }
+        : { ...textUpload(req.body), text: req.body.content };
       const updated = knowledgeResourceService.update(resource.id, {
         content: extracted.text,
         kind: extracted.kind,
-        filename: req.file.originalname,
+        filename: extracted.filename,
         detachFile: true,
       });
       const changed = updated.content_hash !== resource.content_hash;
       const users = knowledgeResourceService.botsUsing(resource.id, req.scope.teamId);
       if (changed) reindexBots(users.map((bot) => bot.id));
-      audit(req, 'knowledge.replace_file', updated, { filename: req.file.originalname, contentChanged: changed });
+      audit(req, 'knowledge.replace_file', updated, { filename: extracted.filename, contentChanged: changed });
       return res.json({
         resource: knowledgeResourceService.toPublic(updated, { usedBy: usedBy(req, resource.id) }),
         contentChanged: changed,

@@ -1,3 +1,5 @@
+import { readKnowledgeFile } from '../utils/kbFileText';
+
 const API_BASE = '/api';
 
 export class ApiError extends Error {
@@ -223,17 +225,25 @@ export const knowledgeApi = {
   list: () => api('/knowledge', { allNumbers: true }),
   get: (id) => api(`/knowledge/${id}`, { allNumbers: true }),
   createText: (body) => api('/knowledge', { method: 'POST', body, allNumbers: true }),
-  upload: (file, { title, botIds } = {}) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    if (title) fd.append('title', title);
-    if (botIds?.length) fd.append('botIds', botIds.join(','));
-    return api('/knowledge', { method: 'POST', body: fd, allNumbers: true, timeoutMs: 60000 });
+  // Files are read in the browser (see utils/kbFileText) and sent as text: uploading
+  // and parsing a large PDF server-side outlasts the API proxy timeout (504).
+  upload: async (file, { title, botIds, onProgress } = {}) => {
+    const { kind, text } = await readKnowledgeFile(file, onProgress);
+    return api('/knowledge', {
+      method: 'POST',
+      body: { title: title || file.name.replace(/\.[^.]+$/, ''), content: text, kind, filename: file.name, botIds },
+      allNumbers: true,
+      timeoutMs: 60000,
+    });
   },
-  replaceFile: (id, file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return api(`/knowledge/${id}/file`, { method: 'PUT', body: fd, allNumbers: true, timeoutMs: 60000 });
+  replaceFile: async (id, file, { onProgress } = {}) => {
+    const { kind, text } = await readKnowledgeFile(file, onProgress);
+    return api(`/knowledge/${id}/file`, {
+      method: 'PUT',
+      body: { content: text, kind, filename: file.name },
+      allNumbers: true,
+      timeoutMs: 60000,
+    });
   },
   update: (id, body) => api(`/knowledge/${id}`, { method: 'PATCH', body, allNumbers: true }),
   remove: (id) => api(`/knowledge/${id}`, { method: 'DELETE', allNumbers: true }),

@@ -254,6 +254,11 @@ async function main() {
   check('admin replaces a knowledge file', replaced.status === 200 && replaced.json.contentChanged && replaced.json.resource.filename === 'faq-v2.txt', replaced.text);
   const kbAfter = await call('GET', `/api/knowledge/${kb.json.resource.id}`, { token: adminA });
   check('replacement content is stored', kbAfter.json?.resource?.content.includes('A: 200'));
+  // The dashboard extracts PDF text in the browser and sends it as JSON.
+  const pdfText = await call('POST', '/api/knowledge', { token: adminA, body: { content: 'QUESTION_ID: q2\nQ: Dates?\nA: June', filename: 'guide.pdf', kind: 'pdf' } });
+  check('extracted PDF text is accepted', pdfText.status === 201 && pdfText.json.resource.kind === 'pdf' && pdfText.json.resource.title === 'guide' && pdfText.json.resource.filename === 'guide.pdf', pdfText.text);
+  const pdfReplace = await call('PUT', `/api/knowledge/${kb.json.resource.id}/file`, { token: adminA, body: { content: 'QUESTION_ID: q1\nQ: Fee?\nA: 300', filename: 'faq-v3.pdf', kind: 'pdf' } });
+  check('file replaced with extracted text', pdfReplace.status === 200 && pdfReplace.json.resource.kind === 'pdf' && pdfReplace.json.contentChanged, pdfReplace.text);
 
   // ---- Analytics ----
   const analytics = await call('GET', '/api/analytics', { token: userA });

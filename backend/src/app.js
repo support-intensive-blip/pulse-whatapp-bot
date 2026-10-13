@@ -80,6 +80,8 @@ function createExpressApp() {
       credentials: true,
     })
   );
+  // Knowledge documents arrive as extracted text (up to 2M chars) — larger than other bodies.
+  app.use('/api/knowledge', express.json({ limit: '10mb' }));
   app.use(
     express.json({
       limit: '2mb',

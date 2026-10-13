@@ -1,4 +1,3 @@
-const { getCommandCatalog } = require('../config/commandCatalog');
 const intensiveConfig = require('../config/intensiveConfig');
 const { currentBot } = require('../utils/botContext');
 
@@ -48,7 +47,6 @@ function getConfigPayload() {
     firewallRedirectMessage: fw.redirectMessage || '',
     firewallScopePrompt: fw.scopePrompt || '',
     firewallOutOfScopePrompt: fw.outOfScopePrompt || '',
-    commands: getCommandCatalog(),
   };
 }
 

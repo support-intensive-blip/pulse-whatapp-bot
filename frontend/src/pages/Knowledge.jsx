@@ -94,9 +94,14 @@ function AddResourceModal({ open, onClose, bots, onAdded }) {
       const added = [];
       const failed = [];
       for (const [i, file] of files.entries()) {
-        setProgress(files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : 'Uploading…');
+        const prefix = files.length > 1 ? `File ${i + 1}/${files.length}: ` : '';
+        setProgress(`${prefix}Reading…`);
         try {
-          const data = await knowledgeApi.upload(file, { title: files.length === 1 ? title : '', botIds });
+          const data = await knowledgeApi.upload(file, {
+            title: files.length === 1 ? title : '',
+            botIds,
+            onProgress: (page, pages) => setProgress(page < pages ? `${prefix}Reading page ${page}/${pages}…` : `${prefix}Uploading…`),
+          });
           added.push(data.resource);
         } catch (err) {
           failed.push({ file, message: err.message });
@@ -203,6 +208,7 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [progress, setProgress] = useState('');
   const fileInput = useRef(null);
 
   useEffect(() => {
@@ -241,7 +247,10 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
     setBusy(true);
     setError('');
     try {
-      const data = await knowledgeApi.replaceFile(resource.id, file);
+      setProgress('Reading…');
+      const data = await knowledgeApi.replaceFile(resource.id, file, {
+        onProgress: (page, pages) => setProgress(page < pages ? `Reading page ${page}/${pages}…` : 'Uploading…'),
+      });
       onChanged(
         data.contentChanged
           ? `“${data.resource.title}” replaced with ${file.name}${data.resource.usedBy?.length ? ' — bots using it are re-indexing.' : '.'}`
@@ -251,6 +260,7 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
       setError(err.message);
       setBusy(false);
     } finally {
+      setProgress('');
       if (fileInput.current) fileInput.current.value = '';
     }
   }
@@ -285,7 +295,7 @@ function ResourceModal({ resourceId, onClose, onChanged }) {
               onChange={(e) => replaceFile(e.target.files?.[0])}
             />
             <Button variant="secondary" size="md" onClick={() => fileInput.current?.click()} disabled={busy}>
-              <RefreshCw size={14} /> Replace file
+              <RefreshCw size={14} /> {progress || 'Replace file'}
             </Button>
             <Button variant="secondary" size="md" onClick={onClose}>Close</Button>
             <Button size="md" onClick={save} disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save'}</Button>

@@ -29,8 +29,8 @@ imported automatically on first boot (`src/services/platformBootstrapService.js`
 > **[docs/RAG-FRAMEWORK.md](docs/RAG-FRAMEWORK.md)** (KB chunking/retrieval/gating rules) and
 > **[docs/VERTEX-PIPELINE.md](docs/VERTEX-PIPELINE.md)** (the active vector-search backend,
 > step-by-step, with the full debug-logging reference). For runtime behavior — message
-> timing, conversation modes, when a chat is considered "ended," what every slash command
-> actually does — see **[docs/BOT-BEHAVIOR.md](docs/BOT-BEHAVIOR.md)**.
+> timing, conversation modes, when a chat is considered "ended," how each media type is
+> handled — see **[docs/BOT-BEHAVIOR.md](docs/BOT-BEHAVIOR.md)**.
 
 ---
 
@@ -171,8 +171,8 @@ Contact messages the business number
               → Gallabox REST API (send) → reply stored in `messages`
 ```
 
-There is no self-chat on the Business API, so the owner-only slash commands (`/assistant`,
-`/note`, `/tokens`, ...) are no longer reachable from WhatsApp — use the dashboard instead.
+There are no WhatsApp slash commands: the old owner commands (`/assistant`, `/note`, `/tokens`, ...)
+needed a self-chat, which the Business API lacks, and were removed — use the dashboard instead.
 
 ## Dashboard
 

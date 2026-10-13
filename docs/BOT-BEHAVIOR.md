@@ -2,8 +2,7 @@
 
 How the assistant actually behaves at runtime: message flow, every timing value in the
 system (with defaults and the env var that overrides each), conversation modes, when a
-conversation is considered "ended," and what each slash command really does under the
-hood. This is a behavior reference, not an architecture map — see [../README.md](../README.md)
+conversation is considered "ended," and how each media type is handled. This is a behavior reference, not an architecture map — see [../README.md](../README.md)
 for the file layout and storage model, and [RAG-FRAMEWORK.md](RAG-FRAMEWORK.md) for the
 knowledge-base retrieval internals.
 
@@ -219,10 +218,9 @@ current implementation) — they only ever create a dashboard queue item.
 
 Slash commands were owner tools typed into WhatsApp's "Message Yourself" chat. The
 WhatsApp Business API has no self-chat, so **none of them are reachable from WhatsApp any
-more**; their effects live in the dashboard (AI toggles, Bot Settings, token usage). A
-student who types something starting with `/` just gets a normal AI answer. The
-`commands/*` modules and `config/commandCatalog.js` are still in the tree but unused by the
-message path.
+more** and the command modules have been removed; their effects live in the dashboard (AI
+toggles, Bot Settings, token usage). A student who types something starting with `/` just
+gets a normal AI answer.
 
 | Media | What happens |
 |---|---|

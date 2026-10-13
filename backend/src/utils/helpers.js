@@ -249,16 +249,6 @@ function extractChatUserId(chatId) {
   return String(chatId).split('@')[0].replace(/\D/g, '');
 }
 
-function extractCommand(text) {
-  if (!text || typeof text !== 'string') return null;
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('/')) return null;
-  const parts = trimmed.split(/\s+/);
-  const command = parts[0].toLowerCase();
-  const args = parts.slice(1).join(' ').trim();
-  return { command, args };
-}
-
 function safeDeleteFile(filePath) {
   try {
     if (filePath && fs.existsSync(filePath)) {
@@ -417,7 +407,6 @@ module.exports = {
   isBaseIgnorableMessage,
   getReplyChatId,
   extractChatUserId,
-  extractCommand,
   safeDeleteFile,
   generateTempFilePath,
   isPhoneLikeString,
