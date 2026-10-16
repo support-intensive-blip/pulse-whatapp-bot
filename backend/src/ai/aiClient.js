@@ -9,6 +9,16 @@ const SUMMARY_SYSTEM_PROMPT =
   'Keep it to 3-5 sentences, capturing key facts, decisions, and open questions. ' +
   'Write in third person, plain text only, no markdown.';
 
+/**
+ * GPT-5/6 models currently accept only their default temperature (1). Sending a
+ * value such as the casual-chat default (0.8) makes the whole completion fail.
+ * Omitting the field lets the API apply its required default while preserving
+ * configurable temperatures for models that support them (for example GPT-4o).
+ */
+function supportsCustomTemperature(model) {
+  return !/^gpt-(?:5|6)(?:[.-]|$)/i.test(String(model || '').trim());
+}
+
 class AiClient {
   constructor(apiKey) {
     this.client = new OpenAI({ apiKey });
@@ -38,7 +48,10 @@ class AiClient {
     const model = options.model || resolveChatModel(tier);
     const temperature = options.temperature ?? getChatTemperature();
 
-    const request = { model, messages, temperature };
+    const request = { model, messages };
+    if (supportsCustomTemperature(model)) {
+      request.temperature = temperature;
+    }
 
     const response = await withRetry(() => this.client.chat.completions.create(request), {
       attempts: 3,
@@ -106,4 +119,4 @@ function getGroqClient(apiKey) {
   return clients.get(key);
 }
 
-module.exports = { getGroqClient };
+module.exports = { getGroqClient, supportsCustomTemperature };
