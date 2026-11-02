@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpen, FlaskConical, Send, Trash2 } from 'lucide-react';
+import { AlertTriangle, BookOpen, FlaskConical, Search, Send, Trash2 } from 'lucide-react';
 import { botsApi } from '../../api/client';
 import { Alert, Badge, Button, Card } from '../ds';
+import ReplyInspector from './ReplyInspector';
+
+function problemCount(trace) {
+  return trace?.findings?.filter((f) => f.severity === 'error' || f.severity === 'warning').length || 0;
+}
 
 function newSessionId() {
   return `s${Date.now().toString(36)}`;
@@ -17,6 +22,7 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [inspected, setInspected] = useState(null);
   const threadRef = useRef(null);
 
   useEffect(() => {
@@ -36,8 +42,8 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
       setMessages((m) => [
         ...m,
         result.reply
-          ? { role: 'assistant', content: result.reply, knowledge: result.knowledge, usedDraft: result.usedDraft }
-          : { role: 'system', content: 'The bot treated this as the end of the conversation and sent nothing.' },
+          ? { role: 'assistant', content: result.reply, knowledge: result.knowledge, usedDraft: result.usedDraft, trace: result.trace }
+          : { role: 'system', content: 'The bot treated this as the end of the conversation and sent nothing.', trace: result.trace },
       ]);
     } catch (err) {
       setError(err.message);
@@ -50,7 +56,10 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
     setSessionId(newSessionId());
     setMessages([]);
     setError('');
+    setInspected(null);
   }
+
+  const lastTraced = [...messages].reverse().find((m) => m.trace);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_18rem]">
@@ -74,7 +83,39 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
           )}
           {messages.map((m, i) =>
             m.role === 'system' ? (
-              <p key={i} className="text-center text-xs text-ink-muted">{m.content}</p>
+              <p key={i} className="text-center text-xs text-ink-muted">
+                {m.content}
+                {m.trace && (
+                  <button type="button" onClick={() => setInspected(m)} className="ml-1 font-medium text-primary hover:underline">
+                    Inspect
+                  </button>
+                )}
+              </p>
+            ) : m.role === 'assistant' && m.trace ? (
+              <div key={i} className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setInspected(m)}
+                  title="Inspect how this reply was produced"
+                  className="group max-w-[80%] rounded-xl bg-ai-soft px-3 py-2 text-left text-sm text-ink shadow-sm ring-1 ring-ai-ring transition hover:ring-2 hover:ring-primary/40"
+                >
+                  <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-ink-muted">AI</span>
+                  <span className="whitespace-pre-wrap">{m.content}</span>
+                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-muted">
+                    <span className="flex items-center gap-1">
+                      <BookOpen size={11} /> {m.knowledge?.hitCount ? `${m.knowledge.chunks.length} knowledge reference(s)` : 'No knowledge used'}
+                    </span>
+                    {problemCount(m.trace) > 0 && (
+                      <span className="flex items-center gap-1 text-amber-700">
+                        <AlertTriangle size={11} /> {problemCount(m.trace)} to check
+                      </span>
+                    )}
+                    <span className="flex items-center gap-1 font-medium text-primary group-hover:underline">
+                      <Search size={11} /> Inspect
+                    </span>
+                  </span>
+                </button>
+              </div>
             ) : (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-start' : 'justify-end'}`}>
                 <div className={`max-w-[80%] rounded-xl px-3 py-2 text-sm shadow-sm ${m.role === 'user' ? 'bg-white text-ink' : 'bg-ai-soft text-ink ring-1 ring-ai-ring'}`}>
@@ -122,20 +163,44 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
             </Button>
           )}
         </Card>
-        {[...messages].reverse().find((m) => m.knowledge?.chunks?.length) && (
+        {lastTraced && (
           <Card>
-            <p className="mb-2 text-sm font-semibold text-ink">Knowledge used in the last reply</p>
-            <ul className="space-y-2">
-              {[...messages].reverse().find((m) => m.knowledge?.chunks?.length).knowledge.chunks.map((c, i) => (
-                <li key={i} className="rounded-lg bg-slate-50 p-2 text-[11px] text-ink-muted">
-                  {c.questionId && <span className="mb-0.5 block font-semibold text-ink">{c.questionId}</span>}
-                  {c.text}
-                </li>
-              ))}
-            </ul>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-ink">Last reply</p>
+              <Button variant="ghost" size="sm" onClick={() => setInspected(lastTraced)}>
+                <Search size={13} /> Inspect
+              </Button>
+            </div>
+            {problemCount(lastTraced.trace) > 0 && (
+              <ul className="mb-3 space-y-1">
+                {lastTraced.trace.findings
+                  .filter((f) => f.severity === 'error' || f.severity === 'warning')
+                  .map((f, i) => (
+                    <li key={i} className="flex gap-1.5 text-[11px] text-amber-800">
+                      <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {f.title}
+                    </li>
+                  ))}
+              </ul>
+            )}
+            {lastTraced.trace.retrieval.chunks.length ? (
+              <ul className="space-y-2">
+                {lastTraced.trace.retrieval.chunks.map((c, i) => (
+                  <li key={i} className="rounded-lg bg-slate-50 p-2 text-[11px] text-ink-muted">
+                    <span className="mb-0.5 flex justify-between gap-2 font-semibold text-ink">
+                      <span>{c.questionId || `Chunk #${c.rank}`}</span>
+                      {c.score != null && <span className="font-normal text-ink-muted">{c.score}</span>}
+                    </span>
+                    {c.canonicalQuestion || c.text.slice(0, 200)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[11px] text-ink-muted">No knowledge chunks were sent to the model.</p>
+            )}
           </Card>
         )}
       </div>
+      <ReplyInspector message={inspected} onClose={() => setInspected(null)} />
     </div>
   );
 }

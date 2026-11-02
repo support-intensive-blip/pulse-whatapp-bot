@@ -200,7 +200,7 @@ class ChatService {
     userMessage,
     isSelfChat = false,
     botAccountId = null,
-    { historyExcludeTrailingUserCount = 0, messageFragments = null } = {}
+    { historyExcludeTrailingUserCount = 0, messageFragments = null, debug = false } = {}
   ) {
     const question = knowledgeBaseService.normalizeQuery(userMessage);
     const owner = userService.findById(ownerUserId);
@@ -256,13 +256,24 @@ class ChatService {
     }
 
     if (knowledgeBaseService.isBriefAcknowledgment(question)) {
-      return this.wrapChatResponse('Got it!', {
-        mode: 'brief_ack',
-        query: question,
-        chunks: [],
-        contextMode: contextState.mode,
-        contextTopic: contextState.topic,
-      });
+      return this.wrapChatResponse(
+        'Got it!',
+        {
+          mode: 'brief_ack',
+          query: question,
+          chunks: [],
+          contextMode: contextState.mode,
+          contextTopic: contextState.topic,
+        },
+        debug
+          ? {
+              debug: {
+                shortCircuit: 'brief_ack',
+                context: { ...contextState, historyCount: historyMessages.length },
+              },
+            }
+          : {}
+      );
     }
 
     const useKbForMessage =
@@ -375,9 +386,11 @@ class ChatService {
       `Chat profile=${chatProfileId} context=${contextState.mode} (${contextService.getModeLabel(contextState.mode)}) msgs=${historyMessages.length} chars=${window.charCount} kbTeam=${kbTeam.kbTeamId ?? 'none'} useKb=${useKbForMessage}${knowledgeContext ? ` kbChars=${knowledgeContext.length} chunks=${kbRetrieval?.chunkCount ?? '?'}` : ' kbChunks=0'} temp=${genOptions.temperature}${contextState.switched ? ` switched=${contextState.reason}` : ''}${historyExcludeTrailingUserCount ? ` batchExclude=${historyExcludeTrailingUserCount}` : ''}`
     );
 
+    const llmTrace = debug ? {} : null;
     const response = await groq.chat(messages, {
       temperature: genOptions.temperature,
       tier: genOptions.tier,
+      trace: llmTrace,
       usageContext: {
         chatProfileId,
         ownerUserId,
@@ -408,6 +421,40 @@ class ChatService {
       conversationEnd: Boolean(structured?.conversationEnd),
       conversationSummary: structured?.conversationSummary || null,
       userPreferences: structured?.userPreferences || null,
+      ...(debug
+        ? {
+            debug: {
+              context: {
+                mode: contextState.mode,
+                label: contextService.getModeLabel(contextState.mode),
+                topic: contextState.topic || null,
+                switched: Boolean(contextState.switched),
+                reason: contextState.reason || null,
+                historyCount: historyMessages.length,
+                windowMinutes: contextWindowMinutes,
+              },
+              kb: {
+                available: Boolean(kbTeam.useKb),
+                usedForMessage: useKbForMessage,
+                unavailableReason: kbTeam.useKb ? null : kbTeam.reason || 'no_kb',
+                minScore: kbRetrieval?.minScore ?? null,
+                candidates: kbRetrieval?.candidates || [],
+                contextChars: knowledgeContext ? knowledgeContext.length : 0,
+              },
+              llmUserMessage,
+              systemPrompt,
+              messages,
+              temperatureRule: knowledgeContext ? 'CHAT_TEMPERATURE (KB hit)' : 'NO_KB_TEMPERATURE (no KB context)',
+              llm: llmTrace,
+              structured: {
+                eventType: structured?.eventType || null,
+                nudgeType: structured?.nudgeType || null,
+                actionText: structured?.actionText || null,
+                conversationEnd: Boolean(structured?.conversationEnd),
+              },
+            },
+          }
+        : {}),
     });
   }
 

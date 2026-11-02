@@ -53,6 +53,7 @@ class AiClient {
       request.temperature = temperature;
     }
 
+    const startedAt = Date.now();
     const response = await withRetry(() => this.client.chat.completions.create(request), {
       attempts: 3,
       baseDelayMs: 600,
@@ -61,7 +62,25 @@ class AiClient {
     });
 
     this.recordUsage(model, response.usage, options.usageContext);
-    return response.choices?.[0]?.message?.content || '';
+    const content = response.choices?.[0]?.message?.content || '';
+
+    // Optional debug sink (playground): what was actually sent and what came back.
+    if (options.trace && typeof options.trace === 'object') {
+      Object.assign(options.trace, {
+        model,
+        tier,
+        temperatureRequested: temperature,
+        temperatureSent: 'temperature' in request ? request.temperature : null,
+        promptTokens: response.usage?.prompt_tokens ?? null,
+        completionTokens: response.usage?.completion_tokens ?? null,
+        totalTokens: response.usage?.total_tokens ?? null,
+        finishReason: response.choices?.[0]?.finish_reason || null,
+        latencyMs: Date.now() - startedAt,
+        rawContent: content,
+      });
+    }
+
+    return content;
   }
 
   async summarizeText(text, systemPrompt, options = {}) {

@@ -632,6 +632,9 @@ class KnowledgeBaseService {
       searchQueryOriginal: contextualQueryOriginal || normalizedQuery,
       translatedSearchQuery:
         contextualQuery !== (contextualQueryOriginal || normalizedQuery) ? contextualQuery : null,
+      minScore: Number(process.env.KB_MIN_SEARCH_SCORE) || 0,
+      // What search returned, even when it is rejected below — the playground shows near-misses.
+      candidates: kbLlmContext.buildChunkMeta(results.slice(0, Math.max(topK, 5))),
     };
 
     if (filtered.length < MIN_RESULTS) {

@@ -5,6 +5,8 @@ const userService = require('./userService');
 const { botAccountService } = require('./botAccountService');
 const { sanitizeUserReply, isConversationEndControlBody } = require('../ai/replyRules');
 const { runWithBot } = require('../utils/botContext');
+const { promptVersionService } = require('./promptVersionService');
+const { buildPlaygroundTrace } = require('./playgroundDiagnostics');
 const { MESSAGE_ROLES, MESSAGE_SOURCES } = require('../utils/constants');
 
 const MAX_MESSAGE_CHARS = 2000;
@@ -56,6 +58,7 @@ class PlaygroundService {
       () =>
         chatService.generateResponse(owner.id, profile.id, text, false, bot.id, {
           historyExcludeTrailingUserCount: 1,
+          debug: true,
         }),
       { overrides }
     );
@@ -72,10 +75,23 @@ class PlaygroundService {
       });
     }
 
+    const latestPrompt = overrides ? null : promptVersionService.latest(bot.id);
+    const trace = buildPlaygroundTrace({
+      studentMessage: text,
+      reply,
+      usedDraft: Boolean(overrides),
+      promptVersion: latestPrompt
+        ? { id: latestPrompt.id, note: latestPrompt.note || null, createdAt: latestPrompt.created_at }
+        : null,
+      kbMeta,
+      debug: typeof result === 'object' && result ? result.debug || null : null,
+    });
+
     return {
       reply,
       conversationEnded: ended,
       usedDraft: Boolean(overrides),
+      trace,
       knowledge: {
         mode: kbMeta?.mode || null,
         hitCount: kbMeta?.hitCount || 0,
