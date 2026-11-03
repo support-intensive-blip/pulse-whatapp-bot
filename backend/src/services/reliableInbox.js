@@ -17,9 +17,11 @@ async function tick(manager) {
     const token = randomUUID();
     const result = await db().query(`UPDATE public.webhook_inbox SET state='processing', lease_token=$1,
       lease_until=now()+interval '10 minutes', attempts=attempts+1
-      WHERE id=(SELECT id FROM public.webhook_inbox
-        WHERE (state='pending' AND next_attempt_at<=now()) OR (state='processing' AND lease_until<now())
-        ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [token]);
+      WHERE id=(SELECT j.id FROM public.webhook_inbox j
+        WHERE ((j.state='pending' AND j.next_attempt_at<=now()) OR (j.state='processing' AND j.lease_until<now()))
+        AND NOT EXISTS (SELECT 1 FROM public.webhook_inbox older WHERE older.bot_id=j.bot_id
+          AND older.state!='completed' AND (older.created_at,older.id)<(j.created_at,j.id))
+        ORDER BY j.created_at, j.id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [token]);
     job = result.rows[0];
     if (!job) return;
     const bot = manager.getBot(Number(job.bot_id));
@@ -84,4 +86,4 @@ function start(manager) {
   const timer = setInterval(() => tick(manager), 5000);
   timer.unref();
 }
-module.exports = { current, checkpointSend, generate, accept, start };
+module.exports = { current, checkpointSend, generate, accept, start, tick };

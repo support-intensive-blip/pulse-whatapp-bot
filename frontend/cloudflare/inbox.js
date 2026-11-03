@@ -5,7 +5,8 @@ async function rest(env, path, options = {}) {
     ...options, headers: { apikey: env.SUPABASE_SECRET_KEY, Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`, 'Content-Type': 'application/json', ...options.headers },
   });
   if (!response.ok) throw new Error(`Inbox storage unavailable (${response.status})`);
-  return response.status === 204 ? null : response.json();
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 async function secret(env, encrypted) {
   const [iv, tag, data] = encrypted.split(':');
