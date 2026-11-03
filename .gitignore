@@ -22,6 +22,8 @@ whatsapp-bot-big query.json
 # frontend build output (Netlify builds it)
 frontend/dist/
 .netlify/
+.wrangler/
+.dev.vars
 
 # old WhatsApp Web session folders, if any are left around
 .wwebjs_auth*/

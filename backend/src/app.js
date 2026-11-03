@@ -244,6 +244,7 @@ async function start() {
       logger.error(`Gallabox bots failed to start: ${error.message}`);
     });
 
+    require('./services/reliableInbox').start(botManager);
     logger.info('WhatsApp AI Assistant started successfully');
   } catch (error) {
     logger.error(`Startup failed: ${error.message}`, { stack: error.stack });

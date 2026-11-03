@@ -308,8 +308,9 @@ class MessageHandler {
         return;
       }
 
-      this.queueContactAiReply({ context, replyChatId, fragment: String(fragment).trim() });
+      await this.queueContactAiReply({ context, replyChatId, fragment: String(fragment).trim() });
     } catch (error) {
+      if (require('../services/reliableInbox').current()) throw error;
       logger.error(`Message handling error: ${error.message}`, { stack: error.stack });
 
       if (!this.canSendErrorReply(replyChatId)) return;
@@ -333,6 +334,9 @@ class MessageHandler {
       ? botAccountService.resolveBatchDelaySeconds(botAccountId) * 1000
       : null;
 
+    if (require('../services/reliableInbox').current()) {
+      return this.flushContactAiBatch({ context, outboundChatIds, combined: fragment, fragments: [fragment], partCount: 1 });
+    }
     inboundMessageBatcher.enqueue({
       key,
       fragment,
@@ -358,7 +362,7 @@ class MessageHandler {
   async flushContactAiBatch({ context, outboundChatIds, combined, fragments, partCount = 1 }) {
     const botAccountId = this.getBotAccountId();
     try {
-      const result = await chatService.generateResponse(
+      const result = await require('../services/reliableInbox').generate(() => chatService.generateResponse(
         context.owner.id,
         context.chatProfile.id,
         combined,
@@ -368,7 +372,7 @@ class MessageHandler {
           historyExcludeTrailingUserCount: Math.max(1, Number(partCount) || 1),
           messageFragments: fragments,
         }
-      );
+      ));
       const unwrapped = unwrapChatResponse(result);
       let response = unwrapped.text;
       let responseKbMeta = unwrapped.kbMeta;
@@ -409,6 +413,7 @@ class MessageHandler {
         kbMeta: responseKbMeta,
       });
     } catch (error) {
+      if (require('../services/reliableInbox').current()) throw error;
       logger.error(
         `Batched AI reply failed profile=${context.chatProfile.id}: ${error.message}`,
         { stack: error.stack }

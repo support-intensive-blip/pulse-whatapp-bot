@@ -17,14 +17,14 @@ const logger = require('../utils/logger');
 function createGallaboxWebhookRouter(botManager) {
   const router = express.Router();
 
-  function dispatch(req, res, bot) {
+  async function dispatch(req, res, bot) {
     const eventName = req.get('x-event-name') || req.body?.event || req.body?.eventName || 'Message.Received';
     const signature = req.get('x-gallabox-signature');
 
     if (!bot) {
       // 200 so Gallabox doesn't retry a number nobody is running.
       logger.warn(`Gallabox webhook ${eventName} for an unknown or stopped bot (${req.originalUrl}) — ignored`);
-      return res.status(200).json({ ok: true, ignored: true });
+      return res.status(503).json({ error: 'Bot unavailable; retry delivery' });
     }
 
     if (bot.webhookSecret) {
@@ -40,18 +40,14 @@ function createGallaboxWebhookRouter(botManager) {
       return res.status(503).json({ error: 'Webhook secret not configured' });
     }
 
-    const payload = req.body || {};
-    logger.info(`Gallabox webhook accepted: bot=${bot.botAccountId}, event=${eventName}, type=${payload?.whatsapp?.type || 'n/a'}`);
+    try {
+      await require('../services/reliableInbox').accept(bot.botAccountId, eventName, req.rawBody, signature);
+      res.status(200).json({ ok: true, durable: true });
+    } catch (error) {
+      logger.error(`Durable webhook storage failed: ${error.message}`);
+      res.status(503).json({ error: 'Message not saved; retry delivery' });
+    }
 
-    // Acknowledge first: Gallabox only needs a 2xx, and the AI reply (batch window
-    // + LLM call) takes far longer than a webhook should be held open.
-    res.status(200).json({ ok: true });
-
-    bot.handleWebhookEvent(eventName, payload).catch((error) => {
-      logger.error(`Gallabox webhook ${eventName} handling failed (bot ${bot.botAccountId}): ${error.message}`, {
-        stack: error.stack,
-      });
-    });
     return undefined;
   }
 

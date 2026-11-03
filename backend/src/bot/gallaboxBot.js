@@ -183,7 +183,7 @@ class GallaboxBot {
       return;
     }
 
-    if (!this.markSeen(inbound.id)) {
+    if (!require('../services/reliableInbox').current() && !this.markSeen(inbound.id)) {
       logger.info(`Ignored duplicate Gallabox webhook for message ${inbound.id}`);
       return;
     }
@@ -219,7 +219,7 @@ class GallaboxBot {
     }
 
     try {
-      const sent = await this.client.sendText(phone, text, { recipientName });
+      const sent = await require('../services/reliableInbox').checkpointSend(() => this.client.sendText(phone, text, { recipientName }));
       this.lastError = null;
       return { id: { _serialized: sent.id } };
     } catch (error) {

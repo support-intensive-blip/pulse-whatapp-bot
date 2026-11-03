@@ -12,6 +12,7 @@ function createRouter(botManagerRef) {
     const ready = botManagerRef?.getReadyBots?.() || [];
     res.json({
       status: 'running',
+      reliableInbox: Boolean(process.env.SUPABASE_DB_URL),
       whatsapp: { connected: ready.length > 0, runningBots: ready.length },
     });
   });
