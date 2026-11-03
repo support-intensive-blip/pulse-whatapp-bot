@@ -31,12 +31,12 @@ const NAV_SECTIONS = [
       { to: '/', label: 'Overview', end: true, icon: LayoutDashboard },
       { to: '/conversations', label: 'Inbox', icon: MessageSquare },
       { to: '/contacts', label: 'Contacts', icon: Contact },
-      { to: '/actions', label: 'Call to Actions', icon: Zap, badgeKey: 'actions' },
+      { to: '/actions', label: 'Action items', icon: Zap, badgeKey: 'actions' },
       { to: '/analytics', label: 'Analytics', icon: BarChart3 },
     ],
   },
   {
-    label: 'Team admin',
+    label: 'Manage workspace',
     admin: true,
     items: [
       { to: '/bots', label: 'AI Bots', icon: Bot },
@@ -240,7 +240,7 @@ export default function Layout() {
           {[
             { to: '/', label: 'Home', end: true, icon: LayoutDashboard },
             { to: '/conversations', label: 'Inbox', icon: MessageSquare },
-            { to: '/actions', label: 'CTA', icon: Zap, badge: pendingCount },
+            { to: '/actions', label: 'Actions', icon: Zap, badge: pendingCount },
             { to: '/contacts', label: 'Contacts', icon: Contact },
           ].map((item) => (
             <NavLink

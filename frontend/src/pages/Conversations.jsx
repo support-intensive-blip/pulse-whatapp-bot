@@ -41,7 +41,7 @@ export default function Conversations() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState('');
-  const [assistantFilter, setAssistantFilter] = useState('all');
+  const [assistantFilter, setAssistantFilter] = useState(() => FILTER_OPTIONS.some(option => option.value === searchParams.get('filter')) ? searchParams.get('filter') : 'all');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [aiSelectMode, setAiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -55,6 +55,7 @@ export default function Conversations() {
     try {
       const { assistant, extra } = filterParams(filter);
       const data = await dataApi.conversations(query, assistant, extra);
+      setHint('');
       setChats(data.chats || []);
       setConnected(data.connected);
       setReconnecting(Boolean(data.reconnecting));

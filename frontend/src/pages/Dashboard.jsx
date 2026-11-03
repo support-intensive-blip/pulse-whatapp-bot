@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -10,6 +10,8 @@ import {
   Sparkles,
   UserRound,
   Zap,
+  ArrowUpRight,
+  RefreshCw,
 } from 'lucide-react';
 import { analyticsApi, dataApi, teamsApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -91,25 +93,39 @@ function TeamOverview() {
   const [analytics, setAnalytics] = useState(null);
   const [awaiting, setAwaiting] = useState(null);
   const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const requestVersion = useRef(0);
 
   const load = useCallback(async () => {
+    const version = ++requestVersion.current;
     setError('');
+    setRefreshing(true);
     try {
       const [s, a, w] = await Promise.all([
         dataApi.stats(true),
         analyticsApi.get(14),
         dataApi.conversations('', 'all', { awaiting: 1, limit: 1000 }),
       ]);
+      if (version !== requestVersion.current) return;
       setStats(s);
       setAnalytics(a);
       setAwaiting(w.count);
+      setUpdatedAt(new Date());
     } catch (err) {
-      setError(err.message);
+      if (version === requestVersion.current) setError(err.message);
+    } finally {
+      if (version === requestVersion.current) setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
+    setStats(null);
+    setAnalytics(null);
+    setAwaiting(null);
+    setUpdatedAt(null);
     if (team) load();
+    return () => { requestVersion.current++; };
   }, [team, scopeVersion, load]);
 
   if (!team) {
@@ -138,11 +154,30 @@ function TeamOverview() {
         <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{team.name}</p>
         <h2 className="text-lg font-semibold text-ink">{currentBot ? currentBot.name : 'All numbers'}</h2>
       </div>
-      {error && <Alert tone="error" className="mb-4">{error}</Alert>}
-
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-ink-muted" aria-live="polite">{refreshing ? 'Updating your workspace…' : updatedAt ? `Updated ${updatedAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : 'Waiting for workspace data'}</p>
+        <button type="button" disabled={refreshing} onClick={load} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-medium text-ink hover:bg-slate-50 disabled:opacity-50"><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />Refresh</button>
+      </div>
+      {error && <Alert tone="error" className="mb-4">Could not update the workspace. {error} Use Refresh to try again.</Alert>}
+      <div className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 text-white">
+        <div className="border-b border-white/10 p-5 sm:p-6">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-teal-300">Your next steps</p>
+          <h3 className="text-xl font-semibold tracking-tight">Start with the conversations that need you.</h3>
+          <p className="mt-2 max-w-xl text-sm text-slate-300">Review unanswered messages and follow up on open actions. AI activity is shown below.</p>
+        </div>
+        <div className="grid sm:grid-cols-2">
+          <Link to="/conversations?filter=awaiting" className="group flex items-center justify-between gap-4 border-b border-white/10 p-5 transition-colors hover:bg-white/5 sm:border-b-0 sm:border-r sm:p-6">
+            <div><span className="text-3xl font-semibold tabular-nums">{awaiting ?? '—'}</span><p className="mt-1 font-medium">Awaiting a reply</p><p className="mt-1 text-xs text-slate-300">The latest message is from the contact</p></div><ArrowUpRight size={22} className="text-teal-300" />
+          </Link>
+          <Link to="/actions" className="group flex items-center justify-between gap-4 p-5 transition-colors hover:bg-white/5 sm:p-6">
+            <div><span className="text-3xl font-semibold tabular-nums">{stats ? pendingCtas : '—'}</span><p className="mt-1 font-medium">Open action items</p><p className="mt-1 text-xs text-slate-300">Review follow-ups and work in progress</p></div><ArrowUpRight size={22} className="text-teal-300" />
+          </Link>
+        </div>
+      </div>
+      <h3 className="mb-3 text-sm font-semibold text-ink">Workspace activity</h3>
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         {!stats || !analytics ? (
-          Array.from({ length: 8 }).map((_, i) => <StatCardSkeleton key={i} />)
+          Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
         ) : (
           <>
             <StatCard icon={Phone} label="Connected numbers" value={`${stats.connectedCount}/${stats.numberCount}`} />
@@ -153,11 +188,7 @@ function TeamOverview() {
               hint={`${scopedBots.filter((b) => b.aiStatus === 'testing').length} in testing`}
             />
             <StatCard icon={MessageSquare} label="Total conversations" value={stats.totalChats.toLocaleString('en-IN')} />
-            <StatCard icon={Sparkles} label="Chats with AI on" value={stats.activeChats.toLocaleString('en-IN')} hint={`${totals.chatsWithAiOff} handled by humans`} />
             <StatCard icon={Sparkles} label="AI replies · 14 days" value={totals.aiReplies.toLocaleString('en-IN')} />
-            <StatCard icon={UserRound} label="Human replies · 14 days" value={totals.humanReplies.toLocaleString('en-IN')} />
-            <StatCard icon={Zap} label="Pending Call-to-Actions" value={pendingCtas} />
-            <StatCard icon={Clock} label="Awaiting a reply" value={awaiting ?? '—'} hint="Last message is from the contact" />
           </>
         )}
       </div>
@@ -244,8 +275,8 @@ export default function Dashboard() {
   return (
     <div className="mx-auto max-w-7xl">
       <SectionHeader title="Overview" subtitle={`Welcome back${user?.name ? `, ${user.name.split(' ')[0]}` : ''}.`} />
-      {isOwner && <OwnerOverview />}
       <TeamOverview />
+      {isOwner && <div className="mt-10 border-t border-border pt-8"><OwnerOverview /></div>}
     </div>
   );
 }

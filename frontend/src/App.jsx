@@ -31,8 +31,8 @@ function PrivateRoute({ children }) {
     return () => clearTimeout(timer);
   }, [loading]);
 
-  if (loading && !timedOut) {
-    return <div className="page-loading">Loading...</div>;
+  if (loading) {
+    return <div className="flex min-h-screen items-center justify-center bg-canvas p-6"><div role="status" className="max-w-sm text-center"><div className="mx-auto mb-5 h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-teal-600" /><h1 className="text-lg font-semibold text-ink">Opening your workspace</h1><p className="mt-2 text-sm text-ink-muted">{timedOut ? 'The server is taking a little longer to start. We’re still connecting; keep this page open.' : 'Checking your session and loading Pulse…'}</p></div></div>;
   }
 
   if (!user) return <Navigate to="/login" replace />;
