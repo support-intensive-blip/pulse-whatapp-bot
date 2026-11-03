@@ -29,7 +29,7 @@ function filterParams(filter) {
 
 export default function Conversations() {
   const { id: selectedId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { loading: authLoading, bots, currentBot, currentBotId, isAdmin, scopeVersion } = useAuth();
   const sidebarView = 'chats';
@@ -41,7 +41,12 @@ export default function Conversations() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState('');
-  const [assistantFilter, setAssistantFilter] = useState(() => FILTER_OPTIONS.some(option => option.value === searchParams.get('filter')) ? searchParams.get('filter') : 'all');
+  const assistantFilter = FILTER_OPTIONS.some(option => option.value === searchParams.get('filter')) ? searchParams.get('filter') : 'all';
+  const setAssistantFilter = (value) => setSearchParams(previous => {
+    const next = new URLSearchParams(previous);
+    if (value === 'all') next.delete('filter'); else next.set('filter', value);
+    return next;
+  });
   const [bulkBusy, setBulkBusy] = useState(false);
   const [aiSelectMode, setAiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -117,11 +122,11 @@ export default function Conversations() {
   }
 
   function selectChat(chatId) {
-    navigate(`/conversations/${chatId}`);
+    navigate(`/conversations/${chatId}${searchParams.size ? `?${searchParams}` : ''}`);
   }
 
   function handleBack() {
-    navigate('/conversations');
+    navigate(`/conversations${searchParams.size ? `?${searchParams}` : ''}`);
   }
 
   async function handleBulkAssistantAll() {
@@ -285,13 +290,12 @@ export default function Conversations() {
         {sidebarView === 'chats' && (
           <>
             <div className="border-b border-border px-3 py-2.5">
-              <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Chat filters">
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Chat filters">
                 {FILTER_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
-                    role="tab"
-                    aria-selected={assistantFilter === opt.value}
+                    aria-pressed={assistantFilter === opt.value}
                     onClick={() => setAssistantFilter(opt.value)}
                     className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
                       assistantFilter === opt.value
@@ -385,7 +389,7 @@ export default function Conversations() {
         )}
 
         {hint && (
-          <div
+          <div role="status"
             className={`relative border-b px-4 py-2.5 pr-9 text-xs ${
               hint.includes('enabled') ||
               hint.includes('disabled') ||
@@ -409,7 +413,7 @@ export default function Conversations() {
           </div>
         )}
 
-        {!connected && sidebarView === 'chats' && (
+        {!loading && !hint && !connected && sidebarView === 'chats' && (
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
             {bots.length ? 'No connected number in this view' : 'No WhatsApp number connected yet'} —{' '}
             <Link to={isAdmin ? '/integrations' : '/'} className="font-medium text-primary hover:underline">
@@ -421,20 +425,19 @@ export default function Conversations() {
         {(
           <div className="flex-1 overflow-y-auto">
             {loading && chats.length === 0 ? (
-              <div className="flex justify-center py-16">
-                <Spinner />
-              </div>
+              <div role="status" className="flex flex-col items-center gap-3 px-6 py-16 text-center"><Spinner /><p className="text-sm text-ink-muted">Loading conversations…</p><p className="text-xs text-ink-muted">The server may take a moment to start.</p></div>
             ) : chats.length === 0 ? (
               <div className="flex flex-col items-center px-6 py-16 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-ink-muted">
                   <MessageSquarePlus size={28} strokeWidth={1.5} />
                 </div>
-                <p className="text-sm font-semibold text-ink">No conversations yet</p>
+                <p className="text-sm font-semibold text-ink">{search ? 'No matching conversations' : assistantFilter === 'awaiting' ? 'No conversations awaiting a reply' : assistantFilter !== 'all' ? 'No conversations in this view' : 'No conversations yet'}</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  {assistantFilter === 'all'
+                  {search ? 'Try another name or phone number.' : assistantFilter === 'all'
                     ? 'Chats appear as soon as someone messages your WhatsApp numbers.'
                     : 'Nothing matches this filter.'}
                 </p>
+                {(search || assistantFilter !== 'all') && <button type="button" onClick={() => { setSearch(''); setAssistantFilter('all'); }} className="mt-4 min-h-10 rounded-lg bg-primary-soft px-4 text-sm font-medium text-primary">Show all conversations</button>}
                 <button
                   type="button"
                   className="mt-4 text-sm font-medium text-primary hover:underline disabled:opacity-50"
