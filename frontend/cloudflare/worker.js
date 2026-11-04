@@ -3,7 +3,7 @@ export default {
   async scheduled(_event, env, ctx) { ctx.waitUntil(wake(env)); },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/webhooks/gallabox' || /^\/webhooks\/gallabox\/\d+$/.test(url.pathname)) return receive(request, env, ctx);
+    if (url.pathname === '/webhooks/gallabox' || /^\/webhooks\/(gallabox|gupshup)\/\d+$/.test(url.pathname)) return receive(request, env, ctx);
     if (url.pathname !== '/api' && !url.pathname.startsWith('/api/')) {
       return env.ASSETS.fetch(request);
     }

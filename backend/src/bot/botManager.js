@@ -77,7 +77,8 @@ class BotManager {
     const existing = this.bots.get(account.id);
     if (existing) await existing.shutdown();
 
-    const bot = new GallaboxBot({ account });
+    const BotClass = account.provider === 'gupshup' ? require('./gupshupBot') : GallaboxBot;
+    const bot = new BotClass({ account });
     this.bots.set(account.id, bot);
     await bot.initialize();
     return bot;
@@ -123,12 +124,15 @@ class BotManager {
     const bot = this.getBot(botAccountId);
     const account = botAccountService.findById(botAccountId);
     const base = publicBaseUrl();
+    const path = account?.provider === 'gupshup'
+      ? `/webhooks/gupshup/${botAccountId}?token=${encodeURIComponent(botAccountService.getCredentials(account).webhookSecret)}`
+      : webhookPathFor(botAccountId);
     return {
       connected: Boolean(bot?.isReady),
       configured: botAccountService.hasCredentials(account),
       live: bot ? bot.getStatus() : { ready: false, provider: 'gallabox' },
-      webhookPath: webhookPathFor(botAccountId),
-      webhookUrl: base ? `${base}${webhookPathFor(botAccountId)}` : null,
+      webhookPath: path,
+      webhookUrl: base ? `${base}${path}` : null,
     };
   }
 

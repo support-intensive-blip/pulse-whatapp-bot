@@ -16,7 +16,7 @@ import {
   formatPhone,
 } from '../components/ds';
 
-const STEPS = ['Basic details', 'Gallabox', 'AI configuration', 'Knowledge base', 'Review & activate'];
+const STEPS = ['Basic details', 'WhatsApp provider', 'AI configuration', 'Knowledge base', 'Review & activate'];
 
 const PROMPT_STARTER = `You are {{name}}, the WhatsApp assistant for <team / program>.
 
@@ -66,6 +66,7 @@ export default function BotWizard() {
     phone: '',
     description: '',
     apiKey: '',
+    provider: 'gallabox',
     apiSecret: '',
     channelId: '',
     accountId: '',
@@ -97,7 +98,7 @@ export default function BotWizard() {
 
   const stepValid = [
     form.name.trim() && phoneDigits.length >= 10,
-    form.apiKey.trim() && form.apiSecret.trim() && form.channelId.trim(),
+    form.apiKey.trim() && (form.provider === 'gupshup' ? form.webhookSecret.trim() : form.apiSecret.trim()) && form.channelId.trim(),
     form.systemPrompt.trim().length > 20 && (!form.testing || testNumbers.length > 0),
     true,
     true,
@@ -110,7 +111,7 @@ export default function BotWizard() {
       setTest(
         await botsApi.testConnection({
           phone: phoneDigits,
-          gallabox: { apiKey: form.apiKey, apiSecret: form.apiSecret, channelId: form.channelId, accountId: form.accountId },
+          gallabox: { provider: form.provider, apiKey: form.apiKey, apiSecret: form.apiSecret, channelId: form.channelId, accountId: form.accountId },
         })
       );
     } catch (err) {
@@ -155,6 +156,7 @@ export default function BotWizard() {
         description: form.description,
         phone: phoneDigits,
         gallabox: {
+          provider: form.provider,
           apiKey: form.apiKey,
           apiSecret: form.apiSecret,
           channelId: form.channelId,
@@ -198,8 +200,9 @@ export default function BotWizard() {
           </div>
           <div className="mt-6 space-y-4">
             <p className="text-sm text-ink">
-              Last step in Gallabox: <span className="text-ink-muted">Settings → Webhooks → Add webhook</span>, events{' '}
-              <code className="text-xs">Message.Received</code>, with this URL and the same webhook secret you entered:
+              {created.gallabox?.provider === 'gupshup'
+                ? 'In Gupshup: Channels → WhatsApp → Webhooks → Add Webhook. Select Gupshup format (v2), Message events, and copy the entire callback URL below.'
+                : 'In Gallabox: Settings → Webhooks → Add webhook. Select Message.Received and use this URL with the same webhook secret.'}
             </p>
             <CopyField label="Webhook URL" value={created.connection?.webhookUrl} />
             {!created.connection?.connected && (
@@ -259,19 +262,27 @@ export default function BotWizard() {
 
         {step === 1 && (
           <div className="space-y-4">
+            <label className="block text-sm">WhatsApp provider
+              <select className="ml-3 rounded border p-2" value={form.provider} onChange={set('provider')}>
+                <option value="gallabox">Gallabox</option>
+                <option value="gupshup">Gupshup</option>
+              </select>
+            </label>
             <p className="text-sm text-ink-muted">
-              From Gallabox: <span className="text-ink">Settings → API keys</span> for the key and secret, and the channel's settings page for its Channel ID.
+              {form.provider === 'gupshup'
+                ? 'Enter the Gupshup API key and exact app name registered for this number. Get these from the app’s API settings; if your Converse account does not show them, ask your Gupshup account manager for WhatsApp API access. Use Gupshup format (v2) and Message events for the callback.'
+                : 'From Gallabox: Settings → API keys for the key and secret, and the channel settings for its Channel ID.'}
               Secrets are encrypted and never shown again — only the last 4 characters.
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <Input label="API key" value={form.apiKey} onChange={set('apiKey')} autoComplete="off" />
-              <Input label="API secret" type="password" value={form.apiSecret} onChange={set('apiSecret')} autoComplete="new-password" />
-              <Input label="Channel ID" value={form.channelId} onChange={set('channelId')} autoComplete="off" />
-              <Input label="Account ID" hint="Optional — needed to verify the key" value={form.accountId} onChange={set('accountId')} autoComplete="off" />
+              {form.provider === 'gallabox' && <Input label="API secret" type="password" value={form.apiSecret} onChange={set('apiSecret')} autoComplete="new-password" />}
+              <Input label={form.provider === 'gupshup' ? 'Gupshup app name' : 'Channel ID'} value={form.channelId} onChange={set('channelId')} autoComplete="off" />
+              {form.provider === 'gallabox' && <Input label="Account ID" hint="Optional — needed to verify the key" value={form.accountId} onChange={set('accountId')} autoComplete="off" />}
             </div>
             <Input
               label="Webhook secret"
-              hint="Choose a secret and enter the same value on the Gallabox webhook. Required in production."
+              hint={form.provider === 'gupshup' ? 'Choose a long random secret. Pulse includes it in the callback URL; copy the entire URL into Gupshup.' : 'Choose a secret and enter the same value on the Gallabox webhook. Required in production.'}
               type="password"
               value={form.webhookSecret}
               onChange={set('webhookSecret')}

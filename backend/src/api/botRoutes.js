@@ -35,6 +35,7 @@ function pick(source, keys) {
 function credentialInput(body) {
   const g = body?.gallabox || body || {};
   return {
+    provider: g.provider,
     apiKey: g.apiKey,
     apiSecret: g.apiSecret,
     webhookSecret: g.webhookSecret,
@@ -121,7 +122,8 @@ function createBotRouter() {
       accountId: input.accountId ?? stored.accountId ?? '',
       phone: String(req.body?.phone || stored.phone || '').replace(/\D/g, ''),
     };
-    res.json(await gallaboxApi.testConnection(config));
+    const provider = input.provider || existing?.provider || 'gallabox';
+    res.json(await (provider === 'gupshup' ? require('../bot/gupshupApi') : gallaboxApi).testConnection(config));
   });
 
   /**
@@ -222,7 +224,7 @@ function createBotRouter() {
   router.post('/bots/:botId/test-connection', ...adminOnly, async (req, res) => {
     const bot = loadBot(req, res);
     if (!bot) return undefined;
-    res.json(await gallaboxApi.testConnection(botAccountService.getCredentials(bot)));
+    res.json(await (bot.provider === 'gupshup' ? require('../bot/gupshupApi') : gallaboxApi).testConnection(botAccountService.getCredentials(bot)));
     return undefined;
   });
 

@@ -90,6 +90,7 @@ function migrateActionItemStatuses(database) {
 }
 
 function runPlatformMigrations(database, helpers) {
+  addColumns(database, 'bot_accounts', [['provider', "TEXT NOT NULL DEFAULT 'gallabox'"]], helpers);
   addColumns(
     database,
     'teams',

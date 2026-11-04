@@ -26,16 +26,26 @@ export async function receive(request, env, ctx) {
     if (id && /^\d+$/.test(id)) path = `bot_accounts?id=eq.${id}`;
     else if (!id && payload.channelId) path = `bot_accounts?gallabox_channel_id=eq.${encodeURIComponent(payload.channelId)}`;
     else return new Response('Bot identifier required', { status: 400 });
-    const bots = await rest(env, `${path}&select=id,webhook_secret_enc&limit=1`);
+    const bots = await rest(env, `${path}&select=id,provider,gallabox_channel_id,webhook_secret_enc&limit=1`);
     if (!bots.length || !bots[0].webhook_secret_enc) return new Response('Unknown bot', { status: 404 });
     const bot = bots[0];
-    const signature = request.headers.get('x-gallabox-signature') || '';
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(await secret(env, bot.webhook_secret_enc)), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+    const isGupshup = new URL(request.url).pathname.startsWith('/webhooks/gupshup/');
+    if ((bot.provider || 'gallabox') !== (isGupshup ? 'gupshup' : 'gallabox')) return new Response('Provider mismatch', { status: 400 });
+    const webhookSecret = await secret(env, bot.webhook_secret_enc);
+    let signature = request.headers.get('x-gallabox-signature') || '';
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(webhookSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify', 'sign']);
+    if (isGupshup) {
+      const token = new URL(request.url).searchParams.get('token') || '';
+      const proof = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(token));
+      if (!await crypto.subtle.verify('HMAC', key, proof, new TextEncoder().encode(webhookSecret))) return new Response('Invalid token', { status: 401 });
+      if (payload.app !== bot.gallabox_channel_id) return new Response('App mismatch', { status: 400 });
+      signature = hex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw)));
+    }
     const sig = signature.replace(/^sha256=/, '');
     const signatureBytes = /^[a-f0-9]{64}$/i.test(sig) ? Uint8Array.from(sig.match(/../g), b => parseInt(b, 16)) : bytes(sig);
     if (!await crypto.subtle.verify('HMAC', key, signatureBytes, new TextEncoder().encode(raw))) return new Response('Invalid signature', { status: 401 });
-    const event = request.headers.get('x-event-name') || payload.event || payload.eventName || 'Message.Received';
-    const messageId = payload.whatsapp?.id || payload.id;
+    const event = isGupshup ? 'gupshup' : request.headers.get('x-event-name') || payload.event || payload.eventName || 'Message.Received';
+    const messageId = isGupshup ? payload.payload?.id : payload.whatsapp?.id || payload.id;
     const identity = `${bot.id}:${event}:${messageId || raw}`;
     const digest = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity)));
     await rest(env, 'webhook_inbox?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' }, body: JSON.stringify({ id: digest, bot_id: bot.id, event_name: event, raw_body: raw, signature }) });

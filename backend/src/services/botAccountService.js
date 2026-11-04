@@ -180,15 +180,18 @@ class BotAccountService {
   }
 
   hasCredentials(bot) {
+    if (bot?.provider === 'gupshup') return Boolean(bot.gallabox_api_key_enc && bot.gallabox_channel_id && bot.webhook_secret_enc && this.getPhone(bot));
     return Boolean(
       bot?.gallabox_api_key_enc && bot?.gallabox_api_secret_enc && bot?.gallabox_channel_id && this.getPhone(bot)
     );
   }
 
   /** Only fields passed with a non-empty value are replaced (secrets are write-only in the UI). */
-  setCredentials(id, { apiKey, apiSecret, webhookSecret, channelId, accountId } = {}) {
+  setCredentials(id, { apiKey, apiSecret, webhookSecret, channelId, accountId, provider } = {}) {
+    if (provider !== undefined && !['gallabox', 'gupshup'].includes(provider)) throw new Error('Unknown WhatsApp provider');
     const fields = ["updated_at = datetime('now')"];
     const values = [];
+    if (provider !== undefined) { fields.push('provider = ?'); values.push(provider); }
     const secrets = { apiKey, apiSecret, webhookSecret };
     for (const [key, column] of Object.entries(SECRET_COLUMNS)) {
       const value = String(secrets[key] ?? '').trim();
@@ -549,6 +552,7 @@ class BotAccountService {
       knowledgeResourceIds: this.parseKnowledgeResourceIds(bot),
       hasPrompt: Boolean(String(bot.system_prompt || '').trim()),
       gallabox: {
+        provider: bot.provider || 'gallabox',
         configured: this.hasCredentials(bot),
         credentialsReadable: creds.readable,
         channelId: bot.gallabox_channel_id,

@@ -21,7 +21,7 @@ function createGallaboxWebhookRouter(botManager) {
     const eventName = req.get('x-event-name') || req.body?.event || req.body?.eventName || 'Message.Received';
     const signature = req.get('x-gallabox-signature');
 
-    if (!bot) {
+    if (!bot || bot.getStatus().provider !== 'gallabox') {
       // 200 so Gallabox doesn't retry a number nobody is running.
       logger.warn(`Gallabox webhook ${eventName} for an unknown or stopped bot (${req.originalUrl}) — ignored`);
       return res.status(503).json({ error: 'Bot unavailable; retry delivery' });

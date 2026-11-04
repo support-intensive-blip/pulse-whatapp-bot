@@ -93,6 +93,7 @@ function createExpressApp() {
   );
 
   app.use(createGallaboxWebhookRouter(botManager));
+  app.use(require('./api/gupshupWebhookRoutes').createGupshupWebhookRouter(botManager));
   app.use('/api', createDashboardRouter());
   app.use('/api/test', createTestApiRouter());
   app.use(createRouter(botManager));

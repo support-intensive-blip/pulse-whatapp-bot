@@ -332,6 +332,7 @@ function IntegrationTab({ bot, onBotChange }) {
   const set = (key) => (e) => setCreds((c) => ({ ...c, [key]: e.target.value }));
   const anyChange = Object.values(creds).some((v) => v.trim());
   const { connection, gallabox } = bot;
+  const isGupshup = gallabox.provider === 'gupshup';
 
   async function run(label, fn) {
     setBusy(label);
@@ -354,8 +355,8 @@ function IntegrationTab({ bot, onBotChange }) {
         </div>
         <dl className="space-y-2 text-sm">
           <div className="flex justify-between gap-3"><dt className="text-ink-muted">Last webhook received</dt><dd className="text-right text-ink">{bot.lastInboundAt ? formatISTDateTime(bot.lastInboundAt) : 'Never'}</dd></div>
-          <div className="flex justify-between gap-3"><dt className="text-ink-muted">Signature check</dt><dd className="text-ink">{gallabox.webhookSecret ? 'On' : <span className="text-amber-700">Off — set a webhook secret</span>}</dd></div>
-          <div className="flex justify-between gap-3"><dt className="text-ink-muted">Channel ID</dt><dd className="font-mono text-xs text-ink">{gallabox.channelId || '—'}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="text-ink-muted">{isGupshup ? 'Callback token' : 'Signature check'}</dt><dd className="text-ink">{gallabox.webhookSecret ? 'On' : <span className="text-amber-700">Off — set a webhook secret</span>}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="text-ink-muted">{isGupshup ? 'App name' : 'Channel ID'}</dt><dd className="font-mono text-xs text-ink">{gallabox.channelId || '—'}</dd></div>
           <div className="flex justify-between gap-3"><dt className="text-ink-muted">Account ID</dt><dd className="font-mono text-xs text-ink">{gallabox.accountId || '—'}</dd></div>
           <div className="flex justify-between gap-3"><dt className="text-ink-muted">API key</dt><dd className="font-mono text-xs text-ink">{gallabox.apiKey || '—'}</dd></div>
           <div className="flex justify-between gap-3"><dt className="text-ink-muted">API secret</dt><dd className="font-mono text-xs text-ink">{gallabox.apiSecret || '—'}</dd></div>
@@ -365,8 +366,8 @@ function IntegrationTab({ bot, onBotChange }) {
         )}
         {bot.lastError && <Alert tone="error" className="mt-3">{bot.lastError}</Alert>}
         <div className="mt-4">
-          <CopyField label="Webhook URL (Gallabox → Settings → Webhooks)" value={connection.webhookUrl} />
-          <p className="mt-1.5 text-xs text-ink-muted">Events: Message.Received (optionally Conversation.Create/Update, Message.WA.Status.Failed).</p>
+          <CopyField label={isGupshup ? 'Callback URL (Gupshup → Channels → WhatsApp → Webhooks)' : 'Webhook URL (Gallabox → Settings → Webhooks)'} value={connection.webhookUrl} />
+          <p className="mt-1.5 text-xs text-ink-muted">{isGupshup ? 'Select Gupshup format (v2) and Message events. Keep the token in the callback URL.' : 'Events: Message.Received (optionally Conversation.Create/Update, Message.WA.Status.Failed).'}</p>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" disabled={!!busy} onClick={() => run('test', async () => setTest(await botsApi.testSaved(bot.id)))}>
@@ -385,8 +386,8 @@ function IntegrationTab({ bot, onBotChange }) {
         {message && <Alert tone={message.tone} onDismiss={() => setMessage(null)} className="mb-3">{message.text}</Alert>}
         <div className="grid gap-3">
           <Input label="API key" value={creds.apiKey} onChange={set('apiKey')} autoComplete="off" />
-          <Input label="API secret" type="password" value={creds.apiSecret} onChange={set('apiSecret')} autoComplete="new-password" />
-          <Input label="Channel ID" value={creds.channelId} onChange={set('channelId')} autoComplete="off" />
+          {!isGupshup && <Input label="API secret" type="password" value={creds.apiSecret} onChange={set('apiSecret')} autoComplete="new-password" />}
+          <Input label={isGupshup ? 'Gupshup app name' : 'Channel ID'} value={creds.channelId} onChange={set('channelId')} autoComplete="off" />
           <Input label="Account ID" value={creds.accountId} onChange={set('accountId')} autoComplete="off" />
           <Input label="Webhook secret" type="password" value={creds.webhookSecret} onChange={set('webhookSecret')} autoComplete="new-password" />
         </div>

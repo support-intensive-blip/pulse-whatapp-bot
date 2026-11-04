@@ -103,6 +103,7 @@ ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "last_error" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "last_inbound_at" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "created_at" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "updated_at" text;
+ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "provider" text;
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_channel" ON public."bot_accounts" ("gallabox_channel_id");
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_team" ON public."bot_accounts" ("team_id");
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_user" ON public."bot_accounts" ("dashboard_user_id");
