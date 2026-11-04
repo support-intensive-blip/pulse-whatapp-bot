@@ -43,6 +43,7 @@ class BotManager {
 
   /** Active bot, fully configured, in an active team. */
   canRun(account) {
+    if (account?.testing_team_id) return false;
     if (!account || account.is_active !== 1 || !botAccountService.hasCredentials(account)) return false;
     const { teamService } = require('../services/teamService');
     const team = teamService.findById(account.team_id);

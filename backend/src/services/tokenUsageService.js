@@ -37,6 +37,7 @@ class TokenUsageService {
    * else the bot whose number owns the chat profile.
    */
   resolveBot(db, { botAccountId = null, chatProfileId = null } = {}) {
+    botAccountId = botAccountId || require('../utils/botContext').currentBotId();
     try {
       if (botAccountId) {
         const bot = db.prepare('SELECT id, team_id FROM bot_accounts WHERE id = ?').get(botAccountId);

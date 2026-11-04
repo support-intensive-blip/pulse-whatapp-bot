@@ -33,6 +33,7 @@ const NAV_SECTIONS = [
       { to: '/contacts', label: 'Contacts', icon: Contact },
       { to: '/actions', label: 'Action items', icon: Zap, badgeKey: 'actions' },
       { to: '/analytics', label: 'Analytics', icon: BarChart3 },
+      { to: '/team-testing', label: 'Testing bot', icon: Bot },
     ],
   },
   {

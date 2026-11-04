@@ -17,7 +17,7 @@ class TeamService {
     return getDatabase()
       .prepare(
         `SELECT t.*,
-                (SELECT COUNT(*) FROM bot_accounts b WHERE b.team_id = t.id AND b.is_active = 1) AS bot_count,
+                (SELECT COUNT(*) FROM bot_accounts b WHERE b.team_id = t.id AND b.is_active = 1 AND b.testing_team_id IS NULL) AS bot_count,
                 (SELECT COUNT(*) FROM dashboard_users u WHERE u.team_id = t.id AND u.is_active = 1) AS user_count,
                 (SELECT GROUP_CONCAT(u.name, ', ') FROM dashboard_users u
                    WHERE u.team_id = t.id AND u.role = 'team_admin' AND u.is_active = 1) AS admin_names
@@ -36,6 +36,7 @@ class TeamService {
          VALUES (?, ?, ?, datetime('now'))`
       )
       .run(teamName, description ? String(description).trim() : null, ownerUserId);
+    require('./teamTestingService').ensureTestingBot(Number(result.lastInsertRowid));
     return this.findById(result.lastInsertRowid);
   }
 
@@ -67,6 +68,7 @@ class TeamService {
       name: team.name,
       description: team.description,
       isActive: team.is_active !== 0,
+      testingBotEnabled: team.testing_bot_enabled === 1,
       createdAt: team.created_at,
       updatedAt: team.updated_at,
       ...(team.bot_count !== undefined

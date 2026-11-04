@@ -90,6 +90,9 @@ function migrateActionItemStatuses(database) {
 }
 
 function runPlatformMigrations(database, helpers) {
+  addColumns(database, 'teams', [['testing_bot_enabled', 'INTEGER DEFAULT 0']], helpers);
+  addColumns(database, 'bot_accounts', [['testing_team_id', 'INTEGER'], ['testing_shared_users', "TEXT DEFAULT '[]'"]], helpers);
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_one_testing_bot_per_team ON bot_accounts(testing_team_id)');
   addColumns(database, 'bot_accounts', [['provider', "TEXT NOT NULL DEFAULT 'gallabox'"]], helpers);
   addColumns(
     database,

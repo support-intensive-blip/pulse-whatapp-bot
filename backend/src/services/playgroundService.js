@@ -23,7 +23,7 @@ class PlaygroundService {
   }
 
   getProfile(bot, userId, sessionId) {
-    const ownerPhone = botAccountService.getPhone(bot);
+    const ownerPhone = bot.testing_team_id ? `team-test-${bot.id}` : botAccountService.getPhone(bot);
     const chatId = this.sessionChatId(bot, userId, sessionId);
     return (
       chatProfileService.findByChatIdForOwner(chatId, ownerPhone) ||
@@ -46,10 +46,10 @@ class PlaygroundService {
   async send(bot, userId, { sessionId, message, draftPrompt = null }) {
     const text = String(message || '').trim().slice(0, MAX_MESSAGE_CHARS);
     if (!text) throw new Error('Type a message to test');
-    if (!botAccountService.getPhone(bot)) throw new Error('This bot has no WhatsApp number yet');
+    if (!bot.testing_team_id && !botAccountService.getPhone(bot)) throw new Error('This bot has no WhatsApp number yet');
 
     const profile = this.getProfile(bot, userId, sessionId);
-    const owner = userService.getOrCreate(botAccountService.getPhone(bot), null);
+    const owner = userService.getOrCreate(bot.testing_team_id ? `team-test-${bot.id}` : botAccountService.getPhone(bot), null);
     memoryService.addMessage(profile.id, MESSAGE_ROLES.USER, text, { source: 'playground' });
 
     const overrides = draftPrompt && String(draftPrompt).trim() ? { system_prompt: String(draftPrompt) } : null;

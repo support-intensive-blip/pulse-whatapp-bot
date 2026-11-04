@@ -179,6 +179,7 @@ class PlatformBootstrapService {
 
     const team = this.ensureDefaultTeam(owner);
     this.assignOrphans(db, owner, team);
+    for (const existingTeam of teamService.list()) require('./teamTestingService').ensureTestingBot(existingTeam.id);
 
     const envBot = this.importEnvCredentials(owner, team);
     const legacyBotIds = this.importLegacyPrompts(owner, envBot);

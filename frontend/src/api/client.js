@@ -174,6 +174,7 @@ export const actionsApi = {
 };
 
 export const teamsApi = {
+  testingAccess: (id, enabled) => api(`/teams/${id}/testing-access`, { method: 'PUT', body: { enabled }, allNumbers: true }),
   overview: () => api('/owner/overview', { allNumbers: true }),
   list: () => api('/teams', { allNumbers: true }),
   create: (body) => api('/teams', { method: 'POST', body, allNumbers: true }),

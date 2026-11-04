@@ -82,6 +82,7 @@ function createExpressApp() {
   );
   // Knowledge documents arrive as extracted text (up to 2M chars) — larger than other bodies.
   app.use('/api/knowledge', express.json({ limit: '10mb' }));
+  app.use('/api/team-testing/knowledge', express.json({ limit: '10mb' }));
   app.use(
     express.json({
       limit: '2mb',
@@ -95,6 +96,7 @@ function createExpressApp() {
   app.use(createGallaboxWebhookRouter(botManager));
   app.use(require('./api/gupshupWebhookRoutes').createGupshupWebhookRouter(botManager));
   app.use('/api', createDashboardRouter());
+  app.use('/api', require('./api/teamTestingRoutes').createTeamTestingRouter());
   app.use('/api/test', createTestApiRouter());
   app.use(createRouter(botManager));
 

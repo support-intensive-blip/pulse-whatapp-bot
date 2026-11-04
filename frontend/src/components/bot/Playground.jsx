@@ -16,7 +16,7 @@ function newSessionId() {
  * Talks to the bot through the real reply pipeline (prompt, knowledge, memory)
  * without sending anything on WhatsApp. `draftPrompt` = answer with an unpublished prompt.
  */
-export default function Playground({ bot, draftPrompt, onClearDraft }) {
+export default function Playground({ bot, draftPrompt, onClearDraft, sendMessage }) {
   const [sessionId, setSessionId] = useState(newSessionId);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
@@ -38,7 +38,8 @@ export default function Playground({ bot, draftPrompt, onClearDraft }) {
     setMessages((m) => [...m, { role: 'user', content: message }]);
     setBusy(true);
     try {
-      const result = await botsApi.playground(bot.id, { sessionId, message, draftPrompt: draftPrompt || undefined });
+      const payload = { sessionId, message, draftPrompt: draftPrompt || undefined };
+      const result = await (sendMessage ? sendMessage(payload) : botsApi.playground(bot.id, payload));
       setMessages((m) => [
         ...m,
         result.reply

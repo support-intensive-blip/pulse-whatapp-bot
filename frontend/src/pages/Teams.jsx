@@ -256,6 +256,15 @@ export default function Teams() {
                       <Button variant="ghost" size="sm" onClick={() => setToggle(t)}>
                         {t.isActive ? 'Deactivate' : 'Activate'}
                       </Button>
+                      <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
+                        setBusy(true);
+                        try {
+                          await teamsApi.testingAccess(t.id, !t.testingBotEnabled);
+                          await load();
+                          setMessage({ tone: 'success', text: `Testing bot ${t.testingBotEnabled ? 'disabled' : 'enabled'} for ${t.name}.` });
+                        } catch (err) { setMessage({ tone: 'error', text: err.message }); }
+                        finally { setBusy(false); }
+                      }}>{t.testingBotEnabled ? 'Disable testing bot' : 'Enable testing bot'}</Button>
                     </div>
                   </td>
                 </tr>

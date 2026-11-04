@@ -134,7 +134,7 @@ class BotAccountService {
   }
 
   listAll({ teamId = null, includeInactive = true } = {}) {
-    const where = [];
+    const where = ['testing_team_id IS NULL'];
     const params = [];
     if (teamId) {
       where.push('team_id = ?');
