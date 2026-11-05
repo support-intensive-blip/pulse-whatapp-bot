@@ -20,6 +20,7 @@ import {
 } from '../components/ds';
 import PromptEditor from '../components/bot/PromptEditor';
 import Playground from '../components/bot/Playground';
+import AiLimitSettings from '../components/bot/AiLimitSettings';
 import { CopyField, TestResult } from './BotWizard';
 import { formatISTDateTime } from '../utils/time';
 
@@ -240,6 +241,7 @@ function BehaviorTab({ bot, onUpdate }) {
       batchDelaySeconds: bot.batchDelaySeconds,
       replyDelaySeconds: bot.replyDelaySeconds,
       contextWindowMinutes: bot.contextWindowMinutes,
+      aiLimits: bot.aiLimits || {},
       testNumbers: bot.testNumbers.join('\n'),
     }),
     [bot]
@@ -263,6 +265,7 @@ function BehaviorTab({ bot, onUpdate }) {
         batchDelaySeconds: Number(form.batchDelaySeconds),
         replyDelaySeconds: Number(form.replyDelaySeconds),
         contextWindowMinutes: Number(form.contextWindowMinutes),
+        aiLimits: form.aiLimits,
         testNumbers: form.testNumbers.split(/[\s,]+/).map((n) => n.trim()).filter(Boolean),
         ...(phoneChanged ? { phone: form.phone } : {}),
       });
@@ -311,6 +314,7 @@ function BehaviorTab({ bot, onUpdate }) {
           </div>
         </div>
       </Card>
+      <Card><AiLimitSettings value={form.aiLimits} onChange={set('aiLimits')} /></Card>
       <Card>
         <h3 className="mb-1 text-sm font-semibold text-ink">Test numbers</h3>
         <p className="mb-3 text-xs text-ink-muted">Used when AI status is Testing. One per line, with country code.</p>

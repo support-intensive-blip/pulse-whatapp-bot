@@ -106,6 +106,7 @@ ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "updated_at" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "testing_team_id" bigint;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "testing_shared_users" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "provider" text;
+ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "ai_limits" text;
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_channel" ON public."bot_accounts" ("gallabox_channel_id");
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_team" ON public."bot_accounts" ("team_id");
 CREATE INDEX IF NOT EXISTS "idx_one_testing_bot_per_team" ON public."bot_accounts" ("testing_team_id");
@@ -291,6 +292,7 @@ ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "is_active" bigint;
 ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "created_at" text;
 ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "updated_at" text;
 ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "testing_bot_enabled" bigint;
+ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "daily_ai_token_budget" bigint;
 CREATE INDEX IF NOT EXISTS "idx_teams_owner" ON public."teams" ("owner_user_id");
 ALTER TABLE public."teams" ENABLE ROW LEVEL SECURITY;
 

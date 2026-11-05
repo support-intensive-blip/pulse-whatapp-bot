@@ -8,6 +8,25 @@ function createUserRouter() {
   const router = express.Router();
   const adminOnly = [requireAuth, requireRole('admin'), requireTeam];
 
+  router.get('/team/ai-budget', ...adminOnly, (req, res) => {
+    const { teamService } = require('../services/teamService');
+    const team = teamService.findById(req.scope.teamId);
+    res.json({ dailyTokens: team.daily_ai_token_budget || 0 });
+  });
+
+  router.put('/team/ai-budget', ...adminOnly, (req, res) => {
+    try {
+      const dailyTokens = require('../services/aiLimits').validateLimit(req.body?.dailyTokens, 100000000, 'Daily team budget');
+      const db = require('../database/db').getDatabase();
+      db.transaction(() => {
+        db.prepare("UPDATE teams SET daily_ai_token_budget = ?, updated_at = datetime('now') WHERE id = ?").run(dailyTokens, req.scope.teamId);
+        auditLogService.record({ actorUserId: req.dashboardUser.id, teamId: req.scope.teamId,
+          action: 'team.ai_budget', targetType: 'team', targetId: req.scope.teamId, meta: { dailyTokens } });
+      })();
+      return res.json({ dailyTokens });
+    } catch (error) { return res.status(400).json({ error: error.message }); }
+  });
+
   function loadTeamMember(req, res) {
     const user = dashboardUserService.findById(parseInt(req.params.userId, 10));
     if (!user || user.team_id !== req.scope.teamId) {

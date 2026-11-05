@@ -202,6 +202,7 @@ class ChatService {
     botAccountId = null,
     { historyExcludeTrailingUserCount = 0, messageFragments = null, debug = false } = {}
   ) {
+    if (botAccountId) require('./aiLimits').assertInput(botAccountService.findById(botAccountId), userMessage);
     const question = knowledgeBaseService.normalizeQuery(userMessage);
     const owner = userService.findById(ownerUserId);
     const chatProfile = chatProfileService.findById(chatProfileId);
@@ -391,6 +392,7 @@ class ChatService {
       temperature: genOptions.temperature,
       tier: genOptions.tier,
       trace: llmTrace,
+      limitTask: 'chat',
       usageContext: {
         chatProfileId,
         ownerUserId,
@@ -443,7 +445,7 @@ class ChatService {
               },
               llmUserMessage,
               systemPrompt,
-              messages,
+              messages: llmTrace.messages || messages,
               temperatureRule: knowledgeContext ? 'CHAT_TEMPERATURE (KB hit)' : 'NO_KB_TEMPERATURE (no KB context)',
               llm: llmTrace,
               structured: {

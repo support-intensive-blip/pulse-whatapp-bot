@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRightLeft, Bot, BookOpen, MessageSquare, Plus, Settings2 } from 'lucide-react';
 import { botsApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { AiBotsGuide, TeamAiBudget } from '../components/bot/AiBotsGuide';
 import {
   AiStatusBadge,
   Alert,
@@ -161,6 +162,7 @@ export default function Bots() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [moving, setMoving] = useState(null);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   function load() {
     setBots(null);
@@ -192,11 +194,14 @@ export default function Bots() {
         title="AI Bots"
         subtitle="Every Gallabox WhatsApp number is an independent AI bot with its own credentials, prompt, knowledge and behavior."
         action={
-          <ButtonLink to="/bots/new">
-            <Plus size={16} /> Connect WhatsApp number
-          </ButtonLink>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setGuideOpen(true)}><BookOpen size={16} /> User guide</Button>
+            <ButtonLink to="/bots/new"><Plus size={16} /> Connect WhatsApp number</ButtonLink>
+          </div>
         }
       />
+      <AiBotsGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
+      {team?.id && <TeamAiBudget key={team.id} />}
       {error && <Alert tone="error" className="mb-4">{error}</Alert>}
       {notice && <Alert tone="success" className="mb-4" onDismiss={() => setNotice('')}>{notice}</Alert>}
       {!bots ? (

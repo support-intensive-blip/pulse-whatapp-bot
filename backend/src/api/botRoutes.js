@@ -21,6 +21,7 @@ const SETTINGS_FIELDS = [
   'replyDelaySeconds',
   'batchDelaySeconds',
   'contextWindowMinutes',
+  'aiLimits',
   'testNumbers',
 ];
 

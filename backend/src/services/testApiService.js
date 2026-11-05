@@ -60,6 +60,7 @@ function isRateLimitError(error) {
 }
 
 function classifyRunError(error) {
+  if (error?.code === 'AI_LIMIT') return { status: 422, code: 'ai_limit', retryable: false };
   if (isRateLimitError(error)) {
     return { status: 429, code: 'rate_limited', retryable: true };
   }

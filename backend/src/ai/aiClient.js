@@ -48,25 +48,39 @@ class AiClient {
     const model = options.model || resolveChatModel(tier);
     const temperature = options.temperature ?? getChatTemperature();
 
-    const request = { model, messages };
+    const { AiLimitError, reserveCompletion } = require('../services/aiLimits');
+    const reservation = reserveCompletion(messages, options.usageContext, options.limitTask);
+    const request = { model, messages: reservation.messages };
+    if (reservation.output) request.max_completion_tokens = reservation.output;
     if (supportsCustomTemperature(model)) {
       request.temperature = temperature;
     }
 
     const startedAt = Date.now();
-    const response = await withRetry(() => this.client.chat.completions.create(request), {
-      attempts: 3,
-      baseDelayMs: 600,
-      shouldRetry: isTransientUpstreamError,
-      label: `AI completion (model=${model})`,
-    });
-
-    this.recordUsage(model, response.usage, options.usageContext);
+    let response;
+    try {
+      response = await withRetry(() => this.client.chat.completions.create(request, reservation.output ? { maxRetries: 0 } : undefined), {
+        attempts: reservation.output ? 1 : 3,
+        baseDelayMs: 600,
+        shouldRetry: isTransientUpstreamError,
+        label: `AI completion (model=${model})`,
+      });
+      this.recordUsage(model, response.usage, reservation.botId ? {
+        category: 'other', ...options.usageContext, botAccountId: reservation.botId || options.usageContext?.botAccountId,
+      } : options.usageContext);
+    } finally {
+      reservation.release();
+    }
+    if (reservation.output && response.choices?.[0]?.finish_reason === 'length') {
+      throw new AiLimitError('The model reached the output limit before finishing. Try a shorter question or increase this task’s limit.',
+        'I couldn’t finish that answer within the response limit. Please ask a more specific question.');
+    }
     const content = response.choices?.[0]?.message?.content || '';
 
     // Optional debug sink (playground): what was actually sent and what came back.
     if (options.trace && typeof options.trace === 'object') {
       Object.assign(options.trace, {
+        messages: request.messages,
         model,
         tier,
         temperatureRequested: temperature,

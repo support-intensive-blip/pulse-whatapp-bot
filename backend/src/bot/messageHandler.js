@@ -202,6 +202,18 @@ class MessageHandler {
       const assistantAllowed = this.isAssistantAllowed(context, inbound.phone);
 
       const escalationContent = context.lastInboundEscalationContent;
+      try {
+        require('../services/aiLimits').assertInput(botAccountService.findById(botAccountId), escalationContent);
+      } catch (error) {
+        if (error.code !== 'AI_LIMIT') throw error;
+        if (assistantAllowed && !botAccountService.isPaused(botAccountService.findById(botAccountId))) {
+          await this.deliverReply({
+            context, targets: resolveOutboundChatIds(context.chatProfile, replyChatId),
+            outgoing: error.reply, source: MESSAGE_SOURCES.ASSISTANT,
+          });
+        }
+        return;
+      }
       const escalationResult = await escalationService.processInbound({
         chatProfileId: context.chatProfile.id,
         content: escalationContent,
@@ -372,7 +384,10 @@ class MessageHandler {
           historyExcludeTrailingUserCount: Math.max(1, Number(partCount) || 1),
           messageFragments: fragments,
         }
-      ));
+      ).catch(error => {
+        if (error.code !== 'AI_LIMIT') throw error;
+        return error.reply;
+      }));
       const unwrapped = unwrapChatResponse(result);
       let response = unwrapped.text;
       let responseKbMeta = unwrapped.kbMeta;

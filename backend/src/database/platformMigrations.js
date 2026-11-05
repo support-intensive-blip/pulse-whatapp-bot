@@ -106,6 +106,8 @@ function runPlatformMigrations(database, helpers) {
   );
 
   migrateBotAccountsMultiBot(database);
+  addColumns(database, 'bot_accounts', [['ai_limits', 'TEXT']], helpers);
+  addColumns(database, 'teams', [['daily_ai_token_budget', 'INTEGER']], helpers);
   database.exec('CREATE INDEX IF NOT EXISTS idx_bot_accounts_user ON bot_accounts(dashboard_user_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_bot_accounts_team ON bot_accounts(team_id)');
   database.exec(

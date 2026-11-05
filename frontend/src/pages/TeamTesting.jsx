@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Alert, Button, Card, Input, SectionHeader, Spinner, Textarea } from '../components/ds';
 import Playground from '../components/bot/Playground';
+import AiLimitSettings from '../components/bot/AiLimitSettings';
 import { readKnowledgeFile } from '../utils/kbFileText';
 
 export default function TeamTesting() {
@@ -17,7 +18,7 @@ export default function TeamTesting() {
     const result = await api('/team-testing', { allNumbers: true });
     setData(result);
     setForm({ name: result.bot.name, prompt: result.prompt || '', assistantName: result.assistantName || '',
-      contextWindowMinutes: result.contextWindowMinutes || 60,
+      contextWindowMinutes: result.contextWindowMinutes || 60, aiLimits: result.aiLimits || {},
       resourceIds: result.bot.knowledgeResourceIds, sharedUserIds: result.sharedUserIds || [] });
   }
 
@@ -28,7 +29,7 @@ export default function TeamTesting() {
       if (!active) return;
       setData(result);
       setForm({ name: result.bot.name, prompt: result.prompt || '', assistantName: result.assistantName || '',
-        contextWindowMinutes: result.contextWindowMinutes || 60, resourceIds: result.bot.knowledgeResourceIds,
+        contextWindowMinutes: result.contextWindowMinutes || 60, aiLimits: result.aiLimits || {}, resourceIds: result.bot.knowledgeResourceIds,
         sharedUserIds: result.sharedUserIds || [] });
     }).catch(err => { if (active) setError(err.message); });
     return () => { active = false; };
@@ -92,6 +93,7 @@ export default function TeamTesting() {
               <input type="checkbox" checked={form.sharedUserIds.includes(member.id)} onChange={() => toggle('sharedUserIds', member.id)} />{member.name}
             </label>)}
           </fieldset>
+          <AiLimitSettings value={form.aiLimits} onChange={aiLimits => setForm(previous => ({ ...previous, aiLimits }))} />
           <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save testing bot'}</Button>
         </form></Card>}
         <Playground key={`${team?.id}-${data.bot.id}`} bot={data.bot}

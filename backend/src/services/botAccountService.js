@@ -425,6 +425,7 @@ class BotAccountService {
       replyDelaySeconds: 'reply_delay_seconds',
       batchDelaySeconds: 'batch_delay_seconds',
       contextWindowMinutes: 'context_window_minutes',
+      aiLimits: 'ai_limits',
       testModeEnabled: 'test_mode_enabled',
       testNumbers: 'test_numbers',
     };
@@ -433,7 +434,9 @@ class BotAccountService {
       if (settings[key] !== undefined) {
         fields.push(`${column} = ?`);
         let val = settings[key];
-        if (column === 'reply_delay_seconds') {
+        if (column === 'ai_limits') {
+          val = JSON.stringify(require('./aiLimits').normalizeLimits(val));
+        } else if (column === 'reply_delay_seconds') {
           val = this.clampReplyDelaySeconds(val);
         } else if (column === 'batch_delay_seconds') {
           val = this.clampBatchDelaySeconds(val);
@@ -549,6 +552,7 @@ class BotAccountService {
       replyDelaySeconds: bot.reply_delay_seconds,
       batchDelaySeconds: bot.batch_delay_seconds,
       contextWindowMinutes: bot.context_window_minutes,
+      aiLimits: require('./aiLimits').readLimits(bot),
       knowledgeResourceIds: this.parseKnowledgeResourceIds(bot),
       hasPrompt: Boolean(String(bot.system_prompt || '').trim()),
       gallabox: {

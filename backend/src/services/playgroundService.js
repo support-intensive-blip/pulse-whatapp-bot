@@ -44,6 +44,7 @@ class PlaygroundService {
 
   /** `draftPrompt` answers with an unpublished prompt instead of the live one. */
   async send(bot, userId, { sessionId, message, draftPrompt = null }) {
+    require('./aiLimits').assertInput(bot, message);
     const text = String(message || '').trim().slice(0, MAX_MESSAGE_CHARS);
     if (!text) throw new Error('Type a message to test');
     if (!bot.testing_team_id && !botAccountService.getPhone(bot)) throw new Error('This bot has no WhatsApp number yet');

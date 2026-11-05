@@ -36,6 +36,7 @@ function createTeamTestingRouter() {
     const resources = knowledgeResourceService.list(bot.team_id);
     return res.json({ bot: { id: bot.id, name: bot.name, knowledgeResourceIds: botAccountService.parseKnowledgeResourceIds(bot) }, canManage,
       ...(canManage ? { prompt: bot.system_prompt || '', contextWindowMinutes: bot.context_window_minutes,
+        aiLimits: require('../services/aiLimits').readLimits(bot),
         assistantName: bot.assistant_name || '', sharedUserIds: sharedUsers(bot),
         resources: resources.map(resource => ({ id: resource.id, title: resource.title })),
         members: getDatabase().prepare("SELECT id, name FROM dashboard_users WHERE team_id = ? AND is_active = 1 AND role = 'team_user'").all(bot.team_id) } : {}) });
@@ -51,7 +52,7 @@ function createTeamTestingRouter() {
       if (users !== undefined && (!Array.isArray(users) || users.some(id => !getDatabase().prepare("SELECT id FROM dashboard_users WHERE id = ? AND team_id = ? AND role = 'team_user' AND is_active = 1").get(id, bot.team_id)))) throw new Error('Share only with active users in this team');
       if (body.prompt !== undefined && (typeof body.prompt !== 'string' || body.prompt.length > 100000)) throw new Error('Prompt must be text under 100,000 characters');
       getDatabase().transaction(() => {
-        botAccountService.updateSettings(bot.id, { name: body.name, assistantName: body.assistantName, contextWindowMinutes: body.contextWindowMinutes });
+        botAccountService.updateSettings(bot.id, { name: body.name, assistantName: body.assistantName, contextWindowMinutes: body.contextWindowMinutes, aiLimits: body.aiLimits });
         if (body.prompt !== undefined) promptVersionService.publish(bot.id, body.prompt, { userId: req.dashboardUser.id, note: 'Testing bot prompt' });
         if (ids !== undefined) botAccountService.setKnowledgeResourceIds(bot.id, ids);
         if (users !== undefined) getDatabase().prepare('UPDATE bot_accounts SET testing_shared_users = ? WHERE id = ?').run(JSON.stringify([...new Set(users)]), bot.id);

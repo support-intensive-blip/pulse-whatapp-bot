@@ -22,6 +22,7 @@ const CATEGORY_LABELS = {
   firewall: 'AI firewall',
   blocked: 'Blocked (no LLM)',
   action_trigger: 'Call to Action',
+  other: 'Other text tasks',
 };
 
 module.exports = {
