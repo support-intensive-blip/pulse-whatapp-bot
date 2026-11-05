@@ -1,6 +1,4 @@
-# Render Blueprint — deploy the backend (backend/) as a Docker web service.
-# The dashboard (frontend/) is deployed separately on Netlify and proxies /api/*
-# to this service (see frontend/netlify.toml).
+# Render Blueprint — build the dashboard and API into one Docker web service.
 #
 # WhatsApp goes through Gallabox (WhatsApp Business API). Every connected number
 # has its own webhook: https://<service>.onrender.com/webhooks/gallabox/<botId>
@@ -16,25 +14,18 @@ services:
   - type: web
     name: pulse-whatapp-bot
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
-    # Only redeploy when backend files change (frontend edits deploy on Netlify).
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     buildFilter:
       paths:
         - backend/**
+        - frontend/**
+        - Dockerfile
+        - .dockerignore
     region: oregon
-    # Without Chromium the container needs far less memory; Starter (512MB) is
-    # likely enough now, but this stays on Standard until that's been verified.
-    plan: standard
+    plan: free
     healthCheckPath: /health
     autoDeploy: true
-    # Render allows exactly one disk. It's mounted at /app/persist and holds
-    # data/ (SQLite conversation history + BM25 cache) — docker-entrypoint.sh
-    # symlinks /app/data into it so every conversation survives redeploys.
-    disk:
-      name: wwebjs-session
-      mountPath: /app/persist
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
@@ -56,7 +47,7 @@ services:
       - key: DASHBOARD_ADMIN_PASSWORD
         sync: false
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: GALLABOX_API_KEY
         sync: false
       - key: GALLABOX_API_SECRET
@@ -73,7 +64,9 @@ services:
       # SUPABASE_DB_URL (Session pooler URI) lets the server create its own tables on boot.
       # Without a persistent disk, also set SQLITE_ENABLED=false (Supabase-primary).
       - key: SUPABASE_ENABLED
-        sync: false
+        value: "true"
+      - key: SQLITE_ENABLED
+        value: "false"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY

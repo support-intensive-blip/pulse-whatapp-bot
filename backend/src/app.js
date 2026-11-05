@@ -100,8 +100,9 @@ function createExpressApp() {
   app.use('/api/test', createTestApiRouter());
   app.use(createRouter(botManager));
 
-  // The dashboard is deployed separately (frontend/ → Netlify), which proxies
-  // /api/* here — this server is API + webhooks only.
+  if (process.env.DASHBOARD_DIST) {
+    app.use(require('./api/dashboardStatic').createDashboardStatic(process.env.DASHBOARD_DIST));
+  }
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
   });

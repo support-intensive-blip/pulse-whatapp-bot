@@ -5,6 +5,13 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/webhooks/gallabox' || /^\/webhooks\/(gallabox|gupshup)\/\d+$/.test(url.pathname)) return receive(request, env, ctx);
     if (url.pathname !== '/api' && !url.pathname.startsWith('/api/')) {
+      if (env.DASHBOARD_REDIRECT === 'true') {
+        if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 });
+        const destination = new URL(env.BACKEND_ORIGIN);
+        destination.pathname = url.pathname;
+        destination.search = url.search;
+        return new Response(null, { status: 302, headers: { Location: destination.href, 'Cache-Control': 'no-store' } });
+      }
       return env.ASSETS.fetch(request);
     }
     const upstream = new URL(env.BACKEND_ORIGIN);
