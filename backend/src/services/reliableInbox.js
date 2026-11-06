@@ -7,26 +7,22 @@ let pool;
 let busy = false;
 const db = () => pool || (pool = new Pool({ connectionString: process.env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false }, max: 3 }));
 const current = () => context.getStore();
-const TEXT_WINDOW_MS = 3000;
 
 function isGupshupText(event) {
   return event?.type === 'message' && event.payload?.type === 'text' &&
     event.payload.id && event.payload.source && typeof event.payload.payload?.text === 'string';
 }
 
-async function groupedText(job, first, verify) {
+async function groupedText(job, first, verify, windowEnd) {
   if (job.event_name !== 'gupshup' || !isGupshupText(first)) return [];
   let ids = job.sent?._group;
   if (!ids) {
     // Older attempts may already have generated or sent a single-message reply.
-    if (job.attempts > 1) return [];
-    const end = new Date(new Date(job.created_at).getTime() + TEXT_WINDOW_MS);
-    const wait = end.getTime() - Date.now();
-    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    if (job.attempts > 1 || !windowEnd) return [];
     const { rows } = await db().query(`SELECT id, event_name, raw_body, signature, state, attempts
       FROM public.webhook_inbox WHERE bot_id=$1 AND state!='completed'
       AND (created_at,id)>(SELECT created_at,id FROM public.webhook_inbox WHERE id=$2)
-      AND created_at<=$3 ORDER BY created_at,id LIMIT 32`, [job.bot_id, job.id, end]);
+      AND created_at<=$3 ORDER BY created_at,id LIMIT 32`, [job.bot_id, job.id, windowEnd]);
     ids = [];
     for (const row of rows) {
       if (row.event_name !== 'gupshup' || row.state !== 'pending' || row.attempts !== 0) break;
@@ -72,14 +68,32 @@ async function tick(manager) {
     if (!job) return;
     const bot = manager.getBot(Number(job.bot_id));
     if (!bot?.isReady) throw new Error('Bot is not ready; retained for retry');
-    heartbeat = setInterval(() => db().query("UPDATE public.webhook_inbox SET lease_until=now()+interval '10 minutes' WHERE id=$1 AND lease_token=$2", [job.id, token]).catch(e => logger.error(`Inbox heartbeat: ${e.message}`)), 30000);
     const { verifySignature } = require('../bot/gallabox/gallaboxApi');
     const verify = row => verifySignature(bot.webhookSecret, Buffer.from(row.raw_body), row.signature);
     if (!verify(job)) {
       throw new Error('Stored webhook signature is invalid');
     }
     const envelope = JSON.parse(job.raw_body);
-    const following = await groupedText(job, envelope, verify);
+    let windowEnd = null;
+    if (job.event_name === 'gupshup' && job.attempts === 1 && isGupshupText(envelope)) {
+      const { botAccountService } = require('./botAccountService');
+      const seconds = botAccountService.resolveBatchDelaySeconds(Number(job.bot_id));
+      if (seconds > 0) {
+        windowEnd = new Date(new Date(job.created_at).getTime() + seconds * 1000);
+        const waitMs = windowEnd.getTime() - Date.now();
+        if (waitMs > 0) {
+          // Release the worker while this bot's oldest message waits for more text.
+          await db().query(`UPDATE public.webhook_inbox SET state='pending', lease_token=NULL,
+            lease_until=NULL, attempts=attempts-1, next_attempt_at=$3 WHERE id=$1 AND lease_token=$2`,
+          [job.id, token, windowEnd]);
+          setTimeout(() => tick(manager), waitMs + 25).unref();
+          completed = true;
+          return;
+        }
+      }
+    }
+    heartbeat = setInterval(() => db().query("UPDATE public.webhook_inbox SET lease_until=now()+interval '10 minutes' WHERE id=$1 AND lease_token=$2", [job.id, token]).catch(e => logger.error(`Inbox heartbeat: ${e.message}`)), 30000);
+    const following = await groupedText(job, envelope, verify, windowEnd);
     const state = { job, index: 0, sent: job.sent || {} };
     await context.run(state, () => bot.handleWebhookEvent(job.event_name, envelope, following));
     const { isSupabaseEnabled } = require('../database/storageMode');

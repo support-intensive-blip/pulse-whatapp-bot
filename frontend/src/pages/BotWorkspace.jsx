@@ -313,7 +313,7 @@ function BehaviorTab({ bot, onUpdate }) {
             description="Off = new conversations wait for a human until someone turns AI on for that chat."
           />
           <div className="grid gap-4 sm:grid-cols-3">
-            <Input label="Batching delay (s)" hint="Combine quick successive messages" type="number" min={0} max={300} value={form.batchDelaySeconds} onChange={set('batchDelaySeconds')} />
+            <Input label="Batching delay (s)" hint="Wait this long to group typed messages. Set 0 to reply to each message separately. WhatsApp menu taps skip this wait." type="number" min={0} max={300} value={form.batchDelaySeconds} onChange={set('batchDelaySeconds')} />
             <Input label="Response delay (s)" hint="Pause before sending a reply" type="number" min={0} max={120} value={form.replyDelaySeconds} onChange={set('replyDelaySeconds')} />
             <Input label="Context window (min)" hint="How much recent chat the AI sees" type="number" min={1} max={1440} value={form.contextWindowMinutes} onChange={set('contextWindowMinutes')} />
           </div>
