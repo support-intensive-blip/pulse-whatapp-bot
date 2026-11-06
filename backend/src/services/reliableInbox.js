@@ -7,6 +7,51 @@ let pool;
 let busy = false;
 const db = () => pool || (pool = new Pool({ connectionString: process.env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false }, max: 3 }));
 const current = () => context.getStore();
+const TEXT_WINDOW_MS = 3000;
+
+function isGupshupText(event) {
+  return event?.type === 'message' && event.payload?.type === 'text' &&
+    event.payload.id && event.payload.source && typeof event.payload.payload?.text === 'string';
+}
+
+async function groupedText(job, first, verify) {
+  if (job.event_name !== 'gupshup' || !isGupshupText(first)) return [];
+  let ids = job.sent?._group;
+  if (!ids) {
+    // Older attempts may already have generated or sent a single-message reply.
+    if (job.attempts > 1) return [];
+    const end = new Date(new Date(job.created_at).getTime() + TEXT_WINDOW_MS);
+    const wait = end.getTime() - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    const { rows } = await db().query(`SELECT id, event_name, raw_body, signature, state, attempts
+      FROM public.webhook_inbox WHERE bot_id=$1 AND state!='completed'
+      AND (created_at,id)>(SELECT created_at,id FROM public.webhook_inbox WHERE id=$2)
+      AND created_at<=$3 ORDER BY created_at,id LIMIT 32`, [job.bot_id, job.id, end]);
+    ids = [];
+    for (const row of rows) {
+      if (row.event_name !== 'gupshup' || row.state !== 'pending' || row.attempts !== 0) break;
+      if (!verify(row)) break;
+      const event = JSON.parse(row.raw_body);
+      if (event.type !== 'message') continue;
+      if (event.app !== first.app || event.payload?.source !== first.payload.source) continue;
+      if (!isGupshupText(event)) break;
+      ids.push(row.id);
+      if (ids.length === 7) break;
+    }
+    job.sent = { ...job.sent, _group: ids };
+    const saved = await db().query("UPDATE public.webhook_inbox SET sent=$3::jsonb WHERE id=$1 AND lease_token=$2 AND state='processing'",
+      [job.id, job.lease_token, JSON.stringify(job.sent)]);
+    if (!saved.rowCount) throw new Error('Inbox lease lost before grouping');
+  }
+  if (!ids.length) return [];
+  const { rows } = await db().query('SELECT id, raw_body, signature FROM public.webhook_inbox WHERE bot_id=$1 AND id=ANY($2::text[])', [job.bot_id, ids]);
+  const byId = new Map(rows.map(row => [row.id, row]));
+  return ids.map(id => {
+    const row = byId.get(id);
+    if (!row || !verify(row)) throw new Error('Stored group signature is invalid');
+    return JSON.parse(row.raw_body);
+  });
+}
 
 async function tick(manager) {
   if (busy || !process.env.SUPABASE_DB_URL) return;
@@ -29,11 +74,14 @@ async function tick(manager) {
     if (!bot?.isReady) throw new Error('Bot is not ready; retained for retry');
     heartbeat = setInterval(() => db().query("UPDATE public.webhook_inbox SET lease_until=now()+interval '10 minutes' WHERE id=$1 AND lease_token=$2", [job.id, token]).catch(e => logger.error(`Inbox heartbeat: ${e.message}`)), 30000);
     const { verifySignature } = require('../bot/gallabox/gallaboxApi');
-    if (!verifySignature(bot.webhookSecret, Buffer.from(job.raw_body), job.signature)) {
+    const verify = row => verifySignature(bot.webhookSecret, Buffer.from(row.raw_body), row.signature);
+    if (!verify(job)) {
       throw new Error('Stored webhook signature is invalid');
     }
+    const envelope = JSON.parse(job.raw_body);
+    const following = await groupedText(job, envelope, verify);
     const state = { job, index: 0, sent: job.sent || {} };
-    await context.run(state, () => bot.handleWebhookEvent(job.event_name, JSON.parse(job.raw_body)));
+    await context.run(state, () => bot.handleWebhookEvent(job.event_name, envelope, following));
     const { isSupabaseEnabled } = require('../database/storageMode');
     if (isSupabaseEnabled()) {
       const sync = require('../database/supabaseSync');
@@ -41,7 +89,13 @@ async function tick(manager) {
       await sync.flushSupabaseOutbox(cache);
       if (sync.pendingCount(cache)) throw new Error('Conversation storage sync pending');
     }
-    await db().query("UPDATE public.webhook_inbox SET state='completed', completed_at=now(), raw_body='', signature='', lease_until=NULL WHERE id=$1 AND lease_token=$2", [job.id, token]);
+    await db().query(`WITH head AS (
+      UPDATE public.webhook_inbox SET state='completed', completed_at=now(), raw_body='', signature='', lease_until=NULL
+      WHERE id=$1 AND lease_token=$2 RETURNING bot_id
+    )
+    UPDATE public.webhook_inbox SET state='completed', completed_at=now(), raw_body='', signature='', lease_until=NULL
+    WHERE bot_id=(SELECT bot_id FROM head) AND id=ANY($3::text[]) AND state='pending'`,
+    [job.id, token, job.sent?._group || []]);
     completed = true;
   } catch (error) {
     logger.error(`Reliable inbox: ${error.message}`);

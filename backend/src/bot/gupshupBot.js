@@ -10,6 +10,7 @@ class GupshupBot extends GallaboxBot {
     const config = botAccountService.getCredentials(options.account);
     this.appName = config.channelId;
     this.supportsWhatsAppLists = true;
+    this.singleReplyBubble = true;
     this.client.sendText = async (phone, text, { menu } = {}) => {
       if (menu) {
         try {
@@ -22,7 +23,7 @@ class GupshupBot extends GallaboxBot {
     };
   }
 
-  async processWebhookEvent(eventName, envelope) {
+  async processWebhookEvent(eventName, envelope, following = []) {
     if (envelope.type !== 'message' || envelope.app !== this.appName) return;
     const message = envelope.payload;
     if (!message?.id || !message.source) return;
@@ -45,6 +46,9 @@ class GupshupBot extends GallaboxBot {
     } else if (type !== 'text') return;
     return super.processWebhookEvent('Message.Received', {
       channelId: this.channelId, contact: { name: message.sender?.name }, whatsapp,
+      groupedText: following.length ? [envelope, ...following].map(({ payload }) => ({
+        id: payload.id, text: payload.payload.text.trim(),
+      })).filter(part => part.text) : undefined,
     });
   }
 

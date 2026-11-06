@@ -149,8 +149,8 @@ class GallaboxBot {
     };
   }
 
-  async handleWebhookEvent(eventName, payload) {
-    return runWithBot(this.botAccountId, () => this.processWebhookEvent(eventName, payload));
+  async handleWebhookEvent(eventName, payload, following) {
+    return runWithBot(this.botAccountId, () => this.processWebhookEvent(eventName, payload, following));
   }
 
   async processWebhookEvent(eventName, payload) {
@@ -182,6 +182,7 @@ class GallaboxBot {
       );
       return;
     }
+    if (payload.groupedText) inbound.groupedText = payload.groupedText;
 
     if (!require('../services/reliableInbox').current() && !this.markSeen(inbound.id)) {
       logger.info(`Ignored duplicate Gallabox webhook for message ${inbound.id}`);

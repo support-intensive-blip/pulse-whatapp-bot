@@ -163,7 +163,8 @@ class MessageHandler {
 
     try {
       const context = await this.resolveChatContext(inbound);
-      const body = String(inbound.body || '').trim();
+      const grouped = inbound.groupedText?.filter(part => !isConversationEndControlBody(part.text));
+      const body = grouped ? grouped.map(part => part.text).join('\n') : String(inbound.body || '').trim();
 
       // Control signal from prompt — never store, never reply.
       if (body && isConversationEndControlBody(body)) {
@@ -187,11 +188,13 @@ class MessageHandler {
         context.lastInboundEscalationContent = mediaContent;
         context.mediaAlreadyPersisted = true;
       } else if (body) {
-        const stored = memoryService.addMessage(context.chatProfile.id, MESSAGE_ROLES.USER, body, {
-          source: MESSAGE_SOURCES.WHATSAPP,
-          waMessageId: inbound.id,
-        });
-        context.lastInboundMessageId = stored?.id || null;
+        for (const part of grouped || [{ id: inbound.id, text: body }]) {
+          const stored = memoryService.addMessage(context.chatProfile.id, MESSAGE_ROLES.USER, part.text, {
+            source: MESSAGE_SOURCES.WHATSAPP,
+            waMessageId: part.id,
+          });
+          context.lastInboundMessageId = stored?.id || null;
+        }
         context.lastInboundEscalationContent = body;
       } else {
         logger.info(`Skipped empty message: type=${inbound.type}`);
@@ -336,7 +339,7 @@ class MessageHandler {
         return;
       }
 
-      await this.queueContactAiReply({ context, replyChatId, fragment: String(fragment).trim() });
+      await this.queueContactAiReply({ context, replyChatId, fragment: String(fragment).trim(), grouped });
     } catch (error) {
       if (require('../services/reliableInbox').current()) throw error;
       logger.error(`Message handling error: ${error.message}`, { stack: error.stack });
@@ -351,7 +354,7 @@ class MessageHandler {
     }
   }
 
-  queueContactAiReply({ context, replyChatId, fragment }) {
+  queueContactAiReply({ context, replyChatId, fragment, grouped }) {
     const chatProfileId = context.chatProfile?.id;
     const botAccountId = this.getBotAccountId();
     if (!chatProfileId || !fragment) return;
@@ -363,7 +366,8 @@ class MessageHandler {
       : null;
 
     if (require('../services/reliableInbox').current()) {
-      return this.flushContactAiBatch({ context, outboundChatIds, combined: fragment, fragments: [fragment], partCount: 1 });
+      const fragments = grouped?.map(part => part.text) || [fragment];
+      return this.flushContactAiBatch({ context, outboundChatIds, combined: fragment, fragments, partCount: fragments.length });
     }
     inboundMessageBatcher.enqueue({
       key,
@@ -467,7 +471,7 @@ class MessageHandler {
     }
 
     const recipientName = context.chatProfile.contact_name || null;
-    const chunks = menu ? [text] : splitReplyIntoChunks(text);
+    const chunks = menu || this.whatsapp.singleReplyBubble ? [text] : splitReplyIntoChunks(text);
     for (let i = 0; i < chunks.length; i += 1) {
       if (i > 0) await sleep(800 + Math.random() * 1200);
       await this.whatsapp.sendMessage(targets, chunks[i], { recipientName, menu });
