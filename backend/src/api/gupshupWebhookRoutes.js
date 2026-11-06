@@ -10,8 +10,11 @@ function createGupshupWebhookRouter(botManager) {
     const expected = Buffer.from(bot.webhookSecret || '');
     if (!expected.length || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return res.sendStatus(401);
     try {
+      if (req.body?.type !== 'message') return res.json({ ok: true });
       const signature = crypto.createHmac('sha256', bot.webhookSecret).update(req.rawBody).digest('hex');
-      await require('../services/reliableInbox').accept(bot.botAccountId, 'gupshup', req.rawBody, signature);
+      const inbox = require('../services/reliableInbox');
+      await inbox.accept(bot.botAccountId, 'gupshup', req.rawBody, signature);
+      setImmediate(() => inbox.tick(botManager));
       return res.json({ ok: true, durable: true });
     } catch {
       return res.sendStatus(503);

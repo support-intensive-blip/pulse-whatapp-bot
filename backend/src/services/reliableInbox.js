@@ -13,6 +13,7 @@ async function tick(manager) {
   busy = true;
   let job;
   let heartbeat;
+  let completed = false;
   try {
     const token = randomUUID();
     const result = await db().query(`UPDATE public.webhook_inbox SET state='processing', lease_token=$1,
@@ -41,6 +42,7 @@ async function tick(manager) {
       if (sync.pendingCount(cache)) throw new Error('Conversation storage sync pending');
     }
     await db().query("UPDATE public.webhook_inbox SET state='completed', completed_at=now(), raw_body='', signature='', lease_until=NULL WHERE id=$1 AND lease_token=$2", [job.id, token]);
+    completed = true;
   } catch (error) {
     logger.error(`Reliable inbox: ${error.message}`);
     if (job) await db().query(`UPDATE public.webhook_inbox SET state='pending', lease_until=NULL,
@@ -49,6 +51,7 @@ async function tick(manager) {
   } finally {
     clearInterval(heartbeat);
     busy = false;
+    if (completed) setImmediate(() => tick(manager));
   }
 }
 

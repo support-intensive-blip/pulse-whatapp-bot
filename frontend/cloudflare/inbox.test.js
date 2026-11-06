@@ -17,13 +17,15 @@ globalThis.fetch = async (url, options = {}) => {
 };
 const env = { SUPABASE_URL: 'https://example.invalid', SUPABASE_SECRET_KEY: 'test', ENCRYPTION_KEY: encryptionKey };
 const ctx = { waitUntil(promise) { promise.catch(() => {}); } };
-const send = (secret, app = 'TestApp') => receive(new Request(`https://example.invalid/webhooks/gupshup/7?token=${secret}`, {
-  method: 'POST', body: JSON.stringify({ app, type: 'message', payload: { id: 'message-1', source: '919999999999', type: 'text', payload: { text: 'Hello' } } }),
+const send = (secret, app = 'TestApp', type = 'message') => receive(new Request(`https://example.invalid/webhooks/gupshup/7?token=${secret}`, {
+  method: 'POST', body: JSON.stringify({ app, type, payload: { id: 'message-1', source: '919999999999', type: 'text', payload: { text: 'Hello' } } }),
 }), env, ctx);
 try {
   assert.equal((await send('wrong')).status, 401);
   assert.equal(writes.length, 0);
   assert.equal((await send(token, 'OtherApp')).status, 400);
+  assert.equal((await send(token, 'TestApp', 'message-event')).status, 200);
+  assert.equal(writes.length, 0);
   assert.equal((await send(token)).status, 200);
   assert.equal(writes[0].event_name, 'gupshup');
   assert.equal(writes[0].bot_id, 7);

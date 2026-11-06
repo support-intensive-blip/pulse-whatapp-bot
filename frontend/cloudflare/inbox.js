@@ -39,6 +39,7 @@ export async function receive(request, env, ctx) {
       const proof = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(token));
       if (!await crypto.subtle.verify('HMAC', key, proof, new TextEncoder().encode(webhookSecret))) return new Response('Invalid token', { status: 401 });
       if (payload.app !== bot.gallabox_channel_id) return new Response('App mismatch', { status: 400 });
+      if (payload.type !== 'message') return Response.json({ ok: true });
       signature = hex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw)));
     }
     const sig = signature.replace(/^sha256=/, '');
