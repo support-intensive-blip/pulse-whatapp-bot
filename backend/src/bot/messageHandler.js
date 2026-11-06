@@ -269,6 +269,22 @@ class MessageHandler {
         return;
       }
 
+      const { readMenu, getMenuReply, findOption } = require('../services/whatsappMenu');
+      const menuSettings = assistantAllowed && body && !inbound.hasMedia
+        ? readMenu(botAccountService.findById(botAccountId))
+        : null;
+      const menu = menuSettings && getMenuReply(menuSettings, body, this.whatsapp.supportsWhatsAppLists);
+      if (menu) {
+        await this.deliverReply({
+          context,
+          targets: resolveOutboundChatIds(context.chatProfile, replyChatId),
+          outgoing: menu.text,
+          source: MESSAGE_SOURCES.ASSISTANT,
+          menu: menu.message,
+        });
+        return;
+      }
+
       if (body && !inbound.hasMedia) {
         const firewallResult = await scopeFirewallService.evaluate({
           message: body,
@@ -313,7 +329,7 @@ class MessageHandler {
 
       const fragment = inbound.hasMedia
         ? await this.resolveMediaFragmentForBatch(inbound, context)
-        : body;
+        : (menuSettings && findOption(menuSettings, body)?.request) || body;
 
       if (!fragment || !String(fragment).trim()) {
         logger.warn(`Nothing to answer for profile ${context.chatProfile.id} (type=${inbound.type})`);
@@ -437,7 +453,7 @@ class MessageHandler {
   }
 
   /** Reply delay → chunked send → store the reply in conversation history. */
-  async deliverReply({ context, targets, outgoing, source, kbMeta = null }) {
+  async deliverReply({ context, targets, outgoing, source, kbMeta = null, menu }) {
     const text = String(outgoing || '').trim();
     if (!text) {
       logger.warn(`No reply after post-processing for profile ${context.chatProfile.id}`);
@@ -451,10 +467,10 @@ class MessageHandler {
     }
 
     const recipientName = context.chatProfile.contact_name || null;
-    const chunks = splitReplyIntoChunks(text);
+    const chunks = menu ? [text] : splitReplyIntoChunks(text);
     for (let i = 0; i < chunks.length; i += 1) {
       if (i > 0) await sleep(800 + Math.random() * 1200);
-      await this.whatsapp.sendMessage(targets, chunks[i], { recipientName });
+      await this.whatsapp.sendMessage(targets, chunks[i], { recipientName, menu });
     }
 
     memoryService.addMessage(context.chatProfile.id, MESSAGE_ROLES.ASSISTANT, text, {

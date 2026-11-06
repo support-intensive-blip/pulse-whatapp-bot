@@ -22,6 +22,7 @@ const SETTINGS_FIELDS = [
   'batchDelaySeconds',
   'contextWindowMinutes',
   'aiLimits',
+  'whatsappMenu',
   'testNumbers',
 ];
 

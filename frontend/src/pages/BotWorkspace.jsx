@@ -21,6 +21,7 @@ import {
 import PromptEditor from '../components/bot/PromptEditor';
 import Playground from '../components/bot/Playground';
 import AiLimitSettings from '../components/bot/AiLimitSettings';
+import WhatsAppMenuSettings from '../components/bot/WhatsAppMenuSettings';
 import { CopyField, TestResult } from './BotWizard';
 import { formatISTDateTime } from '../utils/time';
 
@@ -242,6 +243,7 @@ function BehaviorTab({ bot, onUpdate }) {
       replyDelaySeconds: bot.replyDelaySeconds,
       contextWindowMinutes: bot.contextWindowMinutes,
       aiLimits: bot.aiLimits || {},
+      whatsappMenu: bot.whatsappMenu || {},
       testNumbers: bot.testNumbers.join('\n'),
     }),
     [bot]
@@ -266,6 +268,7 @@ function BehaviorTab({ bot, onUpdate }) {
         replyDelaySeconds: Number(form.replyDelaySeconds),
         contextWindowMinutes: Number(form.contextWindowMinutes),
         aiLimits: form.aiLimits,
+        whatsappMenu: form.whatsappMenu,
         testNumbers: form.testNumbers.split(/[\s,]+/).map((n) => n.trim()).filter(Boolean),
         ...(phoneChanged ? { phone: form.phone } : {}),
       });
@@ -315,6 +318,7 @@ function BehaviorTab({ bot, onUpdate }) {
         </div>
       </Card>
       <Card><AiLimitSettings value={form.aiLimits} onChange={set('aiLimits')} /></Card>
+      <Card><WhatsAppMenuSettings value={form.whatsappMenu} onChange={set('whatsappMenu')} /></Card>
       <Card>
         <h3 className="mb-1 text-sm font-semibold text-ink">Test numbers</h3>
         <p className="mb-3 text-xs text-ink-muted">Used when AI status is Testing. One per line, with country code.</p>

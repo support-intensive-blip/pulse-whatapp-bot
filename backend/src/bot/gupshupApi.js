@@ -1,9 +1,13 @@
 const axios = require('axios');
 
 async function sendText(config, phone, text) {
+  return send(config, phone, { type: 'text', text: String(text) });
+}
+
+async function send(config, phone, message) {
   const body = new URLSearchParams({ channel: 'whatsapp', source: config.phone,
     destination: phone, 'src.name': config.channelId,
-    message: JSON.stringify({ type: 'text', text: String(text) }) });
+    message: JSON.stringify(message) });
   const { data } = await axios.post('https://api.gupshup.io/wa/api/v1/msg', body.toString(), {
     headers: { apikey: config.apiKey, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000,
   });
@@ -18,4 +22,4 @@ async function testConnection(config) {
   return { ok: true, verified: null, message: 'Fields complete. Verify delivery with an inbound WhatsApp message after configuring the callback.' };
 }
 
-module.exports = { sendText, testConnection };
+module.exports = { send, sendText, testConnection };

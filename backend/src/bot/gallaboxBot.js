@@ -210,7 +210,7 @@ class GallaboxBot {
     return null;
   }
 
-  async sendMessage(phoneOrIds, text, { recipientName = null } = {}) {
+  async sendMessage(phoneOrIds, text, { recipientName = null, menu } = {}) {
     if (!this.isReady) throw new Error('WhatsApp (Gallabox) is not connected');
 
     const phone = this.resolveRecipientPhone(phoneOrIds);
@@ -219,7 +219,7 @@ class GallaboxBot {
     }
 
     try {
-      const sent = await require('../services/reliableInbox').checkpointSend(() => this.client.sendText(phone, text, { recipientName }));
+      const sent = await require('../services/reliableInbox').checkpointSend(() => this.client.sendText(phone, text, { recipientName, menu }));
       this.lastError = null;
       return { id: { _serialized: sent.id } };
     } catch (error) {

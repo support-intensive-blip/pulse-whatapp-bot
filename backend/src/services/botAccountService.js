@@ -426,6 +426,7 @@ class BotAccountService {
       batchDelaySeconds: 'batch_delay_seconds',
       contextWindowMinutes: 'context_window_minutes',
       aiLimits: 'ai_limits',
+      whatsappMenu: 'whatsapp_menu',
       testModeEnabled: 'test_mode_enabled',
       testNumbers: 'test_numbers',
     };
@@ -436,6 +437,8 @@ class BotAccountService {
         let val = settings[key];
         if (column === 'ai_limits') {
           val = JSON.stringify(require('./aiLimits').normalizeLimits(val));
+        } else if (column === 'whatsapp_menu') {
+          val = JSON.stringify(require('./whatsappMenu').normalizeMenu(val));
         } else if (column === 'reply_delay_seconds') {
           val = this.clampReplyDelaySeconds(val);
         } else if (column === 'batch_delay_seconds') {
@@ -553,6 +556,7 @@ class BotAccountService {
       batchDelaySeconds: bot.batch_delay_seconds,
       contextWindowMinutes: bot.context_window_minutes,
       aiLimits: require('./aiLimits').readLimits(bot),
+      whatsappMenu: require('./whatsappMenu').readMenu(bot),
       knowledgeResourceIds: this.parseKnowledgeResourceIds(bot),
       hasPrompt: Boolean(String(bot.system_prompt || '').trim()),
       gallabox: {
