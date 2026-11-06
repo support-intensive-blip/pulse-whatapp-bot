@@ -4,7 +4,6 @@ const { currentBot } = require('../utils/botContext');
 // Each bot (Gallabox number) has its own published prompt in bot_accounts.system_prompt
 // (history in bot_prompt_versions). Callers read it through the current bot context;
 // outside one (scripts, eval harness) the hardcoded Intensive prompt is used.
-// Firewall and action-item trigger config stay global (src/config/intensiveConfig.js).
 
 // Used when a dashboard-created bot is running before anyone wrote its prompt.
 const FALLBACK_PROMPT = `You are {{name}}, a helpful WhatsApp assistant.
@@ -30,8 +29,8 @@ function hasConfiguredPrompt() {
   return Boolean(getSystemPromptText());
 }
 
-function getActionItemTriggerPrompt() {
-  return intensiveConfig.ACTION_ITEM_TRIGGER_PROMPT || '';
+function getActionItemTriggerPrompt(bot = currentBot()) {
+  return String(bot?.action_item_trigger_prompt || '').trim();
 }
 
 function getConfigPayload() {
@@ -40,7 +39,7 @@ function getConfigPayload() {
     systemPrompt: getSystemPromptText(),
     systemPromptDefault: '',
     promptConfigured: true,
-    actionItemTriggerPrompt: intensiveConfig.ACTION_ITEM_TRIGGER_PROMPT || '',
+    actionItemTriggerPrompt: getActionItemTriggerPrompt(),
     actionNotificationPhones: '',
     firewallEnabled: Boolean(fw.enabled),
     firewallMode: fw.mode === 'silent' ? 'silent' : 'redirect',

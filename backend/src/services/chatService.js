@@ -13,6 +13,8 @@ const { MODEL_TIERS, getChatTemperature, getNoKbTemperature } = require('../conf
 const { getTierForTask } = require('../config/tokenBudget');
 const knowledgeBaseService = require('./knowledgeBaseService');
 const { botAccountService } = require('./botAccountService');
+const { getActionItemTriggerPrompt } = require('./promptConfigService');
+const { readRules: readActionCategoryRules } = require('./actionCategoryRules');
 const { TOKEN_CATEGORIES } = require('../config/tokenCategories');
 const memoryService = require('./memoryService');
 const { contextService, CONTEXT_MODES } = require('./contextService');
@@ -364,13 +366,18 @@ class ChatService {
       contextReason: contextState.reason,
     };
 
-    const { prompt: systemPrompt } = await this.buildSystemPrompt({
+    const actionBot = botAccountService.findById(botAccountId);
+    const hasCustomActionRules = Boolean(getActionItemTriggerPrompt(actionBot) || readActionCategoryRules(actionBot).length);
+    const { prompt } = await this.buildSystemPrompt({
       chatProfile,
       contextNote: window.contextNote,
       userMessage: llmUserMessage,
       recentHistory: historyMessages,
       knowledgeContext,
     });
+    const systemPrompt = hasCustomActionRules
+      ? `${prompt}\n\nA separate Call-to-Action classifier handles support tickets. Do not claim or promise that you created a ticket or escalated this conversation.`
+      : prompt;
 
     const messages = this.buildMessages({
       systemPrompt,
@@ -403,7 +410,7 @@ class ChatService {
     const structured = parseStructuredReply(response);
     const polished = this.polishReply(structured.message);
     // Playground / eval sessions must not raise real Call-to-Action items.
-    if (!chatProfileService.isApiTestProfile(chatProfile) && this.shouldCreateTicketFromReply(structured, polished)) {
+    if (!hasCustomActionRules && !chatProfileService.isApiTestProfile(chatProfile) && this.shouldCreateTicketFromReply(structured, polished)) {
       this.raiseAssistantTicket({
         botAccountId,
         ownerPhone: owner?.phone,

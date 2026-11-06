@@ -5,6 +5,7 @@ const promptConfigService = require('./promptConfigService');
 const { getGroqClient } = require('../ai/groqClient');
 const { MODEL_TIERS, getChatTemperature } = require('../config/modelConfig');
 const logger = require('../utils/logger');
+const { readRules, activeAssignee } = require('./actionCategoryRules');
 
 const MIN_MESSAGE_LENGTH = 6;
 const MATCH_CONFIDENCE_THRESHOLD = Number(process.env.ACTION_TRIGGER_MIN_CONFIDENCE) || 0.65;
@@ -37,7 +38,7 @@ function parseClassifierJson(raw) {
   }
 }
 
-function buildClassifierSystemPrompt(triggerLines) {
+function buildClassifierSystemPrompt(triggerLines, useConfiguredCategories = false) {
   const rules = triggerLines.map((line, index) => `${index + 1}. ${line}`).join('\n');
 
   return [
@@ -52,7 +53,9 @@ function buildClassifierSystemPrompt(triggerLines) {
     '{"match":boolean,"title":string,"category":string,"confidence":number,"reason":string}',
     '',
     'title: short dashboard label (max 8 words).',
-    'category: short slug (e.g. call, refund, complaint, billing).',
+    useConfiguredCategories
+      ? 'category: the matching numbered rule, as a string (for example "2"). Choose one rule only.'
+      : 'category: short slug (e.g. call, refund, complaint, billing).',
     'confidence: 0.0 to 1.0 — how sure you are this should be flagged.',
     'If nothing applies, return {"match":false,"title":"","category":"","confidence":0,"reason":"no match"}.',
   ].join('\n');
@@ -181,27 +184,35 @@ function resolveEscalationContext(profile, botAccountId = null) {
 
   if (!bot) return null;
 
-  const triggerPrompt = promptConfigService.getActionItemTriggerPrompt();
+  const triggerPrompt = promptConfigService.getActionItemTriggerPrompt(bot);
   const apiKey = process.env.OPENAI_API_KEY || null;
 
-  return { bot, teamId: null, triggerPrompt, apiKey };
+  return { bot, rules: readRules(bot), triggerPrompt, apiKey };
 }
 
 async function detectEscalation(text, options = {}) {
   const body = (text || '').trim();
-  if (!body || body.length < MIN_MESSAGE_LENGTH) return null;
+  if (!body) return null;
 
   const triggerPrompt =
     options.triggerPrompt !== undefined
       ? options.triggerPrompt
       : promptConfigService.getActionItemTriggerPrompt();
 
-  const triggerLines = parseTriggerLines(triggerPrompt);
+  const rules = options.rules || [];
+  const triggerLines = rules.length ? rules.map(rule => rule.trigger) : parseTriggerLines(triggerPrompt);
   if (triggerLines.length === 0) return null;
 
   const apiKey = options.apiKey !== undefined ? options.apiKey : process.env.OPENAI_API_KEY;
   if (!apiKey) {
     logger.warn('Call to action AI check skipped: no API key — trying keyword match');
+    if (rules.length) {
+      for (const rule of rules) {
+        const match = keywordEscalationMatch(body, [rule.trigger]);
+        if (match) return applyCategoryRule(match, rule);
+      }
+      return null;
+    }
     return keywordEscalationMatch(body, triggerLines);
   }
 
@@ -209,7 +220,7 @@ async function detectEscalation(text, options = {}) {
     const groq = getGroqClient(apiKey);
     const response = await groq.chat(
       [
-        { role: 'system', content: buildClassifierSystemPrompt(triggerLines) },
+        { role: 'system', content: buildClassifierSystemPrompt(triggerLines, Boolean(rules.length)) },
         { role: 'user', content: body },
       ],
       {
@@ -220,11 +231,18 @@ async function detectEscalation(text, options = {}) {
     );
 
     const parsed = parseClassifierJson(response);
-    return normalizeClassifierResult(parsed, triggerLines);
+    const match = normalizeClassifierResult(parsed, triggerLines);
+    if (!match || !rules.length) return match;
+    const selected = /^\d+$/.test(match.category) ? rules[Number(match.category) - 1] : null;
+    return selected ? applyCategoryRule(match, selected) : null;
   } catch (error) {
     logger.warn(`Call to action classifier failed: ${error.message}`);
     return null;
   }
+}
+
+function applyCategoryRule(match, rule) {
+  return { ...match, id: `category:${rule.category.toLowerCase()}`, category: rule.category, assigneeId: rule.assigneeId };
 }
 
 function resolveBotAccountId(ownerPhone) {
@@ -242,17 +260,19 @@ async function processInbound({
   forceMediaOrLink = false,
 }) {
   const profile = chatProfileService.findById(chatProfileId);
-  if (!profile || profile.chat_type === 'self') return null;
+  if (!profile || profile.chat_type === 'self' || chatProfileService.isApiTestProfile(profile)) return null;
 
   const context = resolveEscalationContext(profile, botAccountId);
   const shouldForce =
     forceMediaOrLink || hasMedia || containsUrl(content);
-  if (!context?.triggerPrompt?.trim() && !shouldForce) return null;
+  const hasRules = Boolean(context?.rules.length || context?.triggerPrompt?.trim());
+  if (!hasRules && !shouldForce) return null;
 
   let match = null;
-  if (context?.triggerPrompt?.trim()) {
+  if (hasRules) {
     match = await detectEscalation(content, {
       triggerPrompt: context.triggerPrompt,
+      rules: context.rules,
       apiKey: context.apiKey,
       usageContext: {
         chatProfileId,
@@ -261,7 +281,7 @@ async function processInbound({
     });
   }
 
-  if (!match && shouldForce) {
+  if (!hasRules && shouldForce) {
     match = autoMatchMediaOrLink(content, { hasMedia, mediaType });
   }
 
@@ -284,6 +304,7 @@ async function processInbound({
     title: match.title,
     description,
     category: match.category,
+    assignedDashboardUserId: activeAssignee(match.assigneeId, context?.bot.team_id),
     priority: match.priority,
     dedupeKey,
     triggerMessageId,

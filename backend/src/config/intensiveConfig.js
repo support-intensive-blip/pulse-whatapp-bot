@@ -19,10 +19,6 @@ const KNOWLEDGE_BASE_PATH =
 // SUPABASE_DB_URL); vertex|pinecone opt into those hosted services instead.
 const VECTOR_BACKEND = (process.env.VECTOR_BACKEND || 'local').toLowerCase();
 
-// Prompt that decides when an inbound message should raise an action item.
-// Empty = feature off (matches current production config).
-const ACTION_ITEM_TRIGGER_PROMPT = '';
-
 // Scope firewall — disabled in production. Kept as a fixed shape so
 // scopeFirewallService keeps working without per-bot config.
 const FIREWALL = {
@@ -38,6 +34,5 @@ module.exports = {
   SYSTEM_PROMPT,
   KNOWLEDGE_BASE_PATH,
   VECTOR_BACKEND,
-  ACTION_ITEM_TRIGGER_PROMPT,
   FIREWALL,
 };

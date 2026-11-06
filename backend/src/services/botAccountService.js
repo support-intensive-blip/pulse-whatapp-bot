@@ -398,6 +398,10 @@ class BotAccountService {
 
     const fields = ["updated_at = datetime('now')"];
     const values = [];
+    if (settings.actionItemTriggerPrompt !== undefined &&
+        (typeof settings.actionItemTriggerPrompt !== 'string' || settings.actionItemTriggerPrompt.length > 6000)) {
+      throw new Error('Call-to-Action prompt must be text with at most 6,000 characters');
+    }
 
     if (settings.aiStatus !== undefined && !Object.values(AI_STATUS).includes(settings.aiStatus)) {
       throw new Error('aiStatus must be active, paused or testing');
@@ -427,6 +431,8 @@ class BotAccountService {
       contextWindowMinutes: 'context_window_minutes',
       aiLimits: 'ai_limits',
       whatsappMenu: 'whatsapp_menu',
+      actionItemTriggerPrompt: 'action_item_trigger_prompt',
+      actionCategoryRules: 'action_category_rules',
       testModeEnabled: 'test_mode_enabled',
       testNumbers: 'test_numbers',
     };
@@ -439,6 +445,10 @@ class BotAccountService {
           val = JSON.stringify(require('./aiLimits').normalizeLimits(val));
         } else if (column === 'whatsapp_menu') {
           val = JSON.stringify(require('./whatsappMenu').normalizeMenu(val));
+        } else if (column === 'action_item_trigger_prompt') {
+          val = val.trim();
+        } else if (column === 'action_category_rules') {
+          val = JSON.stringify(require('./actionCategoryRules').normalizeRules(val, bot.team_id));
         } else if (column === 'reply_delay_seconds') {
           val = this.clampReplyDelaySeconds(val);
         } else if (column === 'batch_delay_seconds') {
@@ -557,6 +567,8 @@ class BotAccountService {
       contextWindowMinutes: bot.context_window_minutes,
       aiLimits: require('./aiLimits').readLimits(bot),
       whatsappMenu: require('./whatsappMenu').readMenu(bot),
+      actionItemTriggerPrompt: bot.action_item_trigger_prompt || '',
+      actionCategoryRules: require('./actionCategoryRules').readRules(bot),
       knowledgeResourceIds: this.parseKnowledgeResourceIds(bot),
       hasPrompt: Boolean(String(bot.system_prompt || '').trim()),
       gallabox: {

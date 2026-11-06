@@ -108,6 +108,8 @@ ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "testing_shared_users
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "provider" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "ai_limits" text;
 ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "whatsapp_menu" text;
+ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "action_item_trigger_prompt" text;
+ALTER TABLE public."bot_accounts" ADD COLUMN IF NOT EXISTS "action_category_rules" text;
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_channel" ON public."bot_accounts" ("gallabox_channel_id");
 CREATE INDEX IF NOT EXISTS "idx_bot_accounts_team" ON public."bot_accounts" ("team_id");
 CREATE INDEX IF NOT EXISTS "idx_one_testing_bot_per_team" ON public."bot_accounts" ("testing_team_id");

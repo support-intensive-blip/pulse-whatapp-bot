@@ -23,6 +23,8 @@ const SETTINGS_FIELDS = [
   'contextWindowMinutes',
   'aiLimits',
   'whatsappMenu',
+  'actionItemTriggerPrompt',
+  'actionCategoryRules',
   'testNumbers',
 ];
 
@@ -196,7 +198,13 @@ function createBotRouter() {
         }
       }
 
-      audit(req, bot, 'bot.update', { ...settings, phoneChanged });
+      const { actionItemTriggerPrompt, actionCategoryRules, ...auditedSettings } = settings;
+      audit(req, bot, 'bot.update', {
+        ...auditedSettings,
+        ...(actionItemTriggerPrompt !== undefined && { actionItemTriggerPromptConfigured: Boolean(actionItemTriggerPrompt.trim()) }),
+        ...(actionCategoryRules !== undefined && { actionCategoryCount: actionCategoryRules.length }),
+        phoneChanged,
+      });
       // A deactivated bot is stopped by the restart (canRun is false).
       if (phoneChanged || body.isActive !== undefined) await restartQuietly(bot.id);
       return res.json({ bot: botDetail(botAccountService.findById(bot.id)) });

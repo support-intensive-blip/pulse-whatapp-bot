@@ -20,8 +20,9 @@ import {
 } from '../components/ds';
 import PromptEditor from '../components/bot/PromptEditor';
 import Playground from '../components/bot/Playground';
-import AiLimitSettings from '../components/bot/AiLimitSettings';
+import AiLimitSettings, { OptionHelp } from '../components/bot/AiLimitSettings';
 import WhatsAppMenuSettings from '../components/bot/WhatsAppMenuSettings';
+import ActionCategorySettings from '../components/bot/ActionCategorySettings';
 import { CopyField, TestResult } from './BotWizard';
 import { formatISTDateTime } from '../utils/time';
 
@@ -242,6 +243,8 @@ function BehaviorTab({ bot, onUpdate }) {
       batchDelaySeconds: bot.batchDelaySeconds,
       replyDelaySeconds: bot.replyDelaySeconds,
       contextWindowMinutes: bot.contextWindowMinutes,
+      actionItemTriggerPrompt: bot.actionItemTriggerPrompt || '',
+      actionCategoryRules: bot.actionCategoryRules || [],
       aiLimits: bot.aiLimits || {},
       whatsappMenu: bot.whatsappMenu || {},
       testNumbers: bot.testNumbers.join('\n'),
@@ -267,6 +270,9 @@ function BehaviorTab({ bot, onUpdate }) {
         batchDelaySeconds: Number(form.batchDelaySeconds),
         replyDelaySeconds: Number(form.replyDelaySeconds),
         contextWindowMinutes: Number(form.contextWindowMinutes),
+        actionItemTriggerPrompt: form.actionItemTriggerPrompt,
+        ...(JSON.stringify(form.actionCategoryRules) !== JSON.stringify(bot.actionCategoryRules || [])
+          ? { actionCategoryRules: form.actionCategoryRules } : {}),
         aiLimits: form.aiLimits,
         whatsappMenu: form.whatsappMenu,
         testNumbers: form.testNumbers.split(/[\s,]+/).map((n) => n.trim()).filter(Boolean),
@@ -316,6 +322,19 @@ function BehaviorTab({ bot, onUpdate }) {
             Call-to-Action), the AI stays silent in that chat until AI is turned back on.
           </div>
         </div>
+      </Card>
+      <Card>
+        <h3 className="mb-2 text-sm font-semibold text-ink">Call-to-Action rules <OptionHelp label="Call-to-Action rules">Set the situations that create a task for your team. This is separate from the bot’s reply prompt.</OptionHelp></h3>
+        <Textarea
+          label="Trigger prompt"
+          hint="Write one situation per line. A saved prompt replaces this bot’s automatic link, attachment, and ticket-wording triggers. Leave it blank to use the defaults."
+          placeholder={'The student asks for a refund.\nThe student requests a callback from a coach.\nThe student reports a payment failure.'}
+          value={form.actionItemTriggerPrompt}
+          onChange={set('actionItemTriggerPrompt')}
+          rows={5}
+          maxLength={6000}
+        />
+        <ActionCategorySettings rules={form.actionCategoryRules} onChange={set('actionCategoryRules')} teamId={bot.teamId} />
       </Card>
       <Card><AiLimitSettings value={form.aiLimits} onChange={set('aiLimits')} /></Card>
       <Card><WhatsAppMenuSettings value={form.whatsappMenu} onChange={set('whatsappMenu')} /></Card>
